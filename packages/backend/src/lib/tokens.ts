@@ -21,6 +21,19 @@ export function generateSessionToken(): string {
   return randomBytes(SESSION_TOKEN_BYTES).toString('base64url');
 }
 
+/**
+ * Display key issued at pairing time.
+ *
+ * This is a machine credential the Fire TV app stores, not a code a human reads
+ * off a screen, so it gets the same 256 bits as a session token rather than the
+ * ~122 of a UUID. That also retires the weakness noted on devices.display_key:
+ * a short pairing code would be brute-forceable offline from a stolen hash,
+ * whereas this is not.
+ */
+export function generateDisplayKey(): string {
+  return randomBytes(SESSION_TOKEN_BYTES).toString('base64url');
+}
+
 /** Stable, lower-case hex SHA-256. This is what goes in the database. */
 export function hashToken(raw: string): string {
   return createHash('sha256').update(raw, 'utf8').digest('hex');

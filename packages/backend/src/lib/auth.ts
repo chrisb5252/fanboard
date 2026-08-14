@@ -207,3 +207,17 @@ export function assertVenueScope(context: { venueId: UUID }, routeVenueId: UUID)
     throw ApiError.forbidden('Session does not belong to this venue');
   }
 }
+
+/**
+ * Rejects a display key being used against a device other than its own.
+ *
+ * The device id in the path is redundant with the one the key authenticated as,
+ * and that redundancy is the risk: without this, a paired display could read any
+ * other display's payload by editing the URL. 404 rather than 403, so the
+ * response cannot be used to enumerate which device ids exist.
+ */
+export function assertDeviceScope(context: DeviceContext, routeDeviceId: UUID): void {
+  if (context.deviceId !== routeDeviceId) {
+    throw ApiError.notFound('Device not found');
+  }
+}

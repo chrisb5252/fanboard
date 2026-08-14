@@ -192,6 +192,10 @@ src/lib/health.ts             shared probe shape for dependency checks
 | `POST /api/venues/:venueId/players` | none | 201 + cookie | 400, 404 |
 | `POST /api/venues/:venueId/picks` | session cookie | 201 new · 200 changed | 400, 401, 403, 404, 423 |
 | `GET /api/venues/:venueId/leaderboard?period=` | none (public) | 200 | 400 |
+| `POST /api/admin/venues/:venueId/device-pairing` | `Bearer <api_key>` | 201 + display key | 400, 401, 403, 404, 409 |
+| `GET /api/admin/venues/:venueId/device-status` | `Bearer <api_key>` | 200 | 400, 401, 403 |
+| `GET /api/devices/:deviceId/display` | `x-display-key` | 200 | 400, 401, 404 |
+| `POST /api/devices/:deviceId/heartbeat` | `x-display-key` | 200 | 400, 401, 404 |
 
 The graph is acyclic (verified with `madge --circular`); `logger`, `env`,
 `health` and `sports-provider` are leaves.
@@ -230,6 +234,48 @@ TLS — see `.env.example`.
 
 `assertVenueScope` rejects a valid session acting on a different venue than the
 one in the URL. Without it, changing the venue id in the path would be enough.
+
+### Fire TV displays
+
+Pairing issues a 256-bit display key, returns it **once**, and stores only its
+SHA-256 hash. It cannot be re-read or recovered from a dump; losing it means
+re-pairing. That also retires the weakness noted earlier on
+`devices.display_key` — this is a machine credential, not a short code a human
+reads off a screen, so it is not brute-forceable offline from a stolen hash.
+
+The display key is the least-privileged credential in the system, and its scope
+is enforced three ways: it authenticates one device, the device id in the path
+must be that same device (404 otherwise, so it cannot be used to enumerate
+displays), and every query is filtered by the venue the key resolved to. It
+cannot reach admin routes, other devices, other venues, or any player data.
+
+**One deliberate exception to "devices never write":** the heartbeat. A display
+may stamp its own `last_heartbeat` and nothing else — scoped by the device id
+the key authenticated as, touching no game, pick, player or venue row. The blunt
+reading of the rule would make liveness reporting impossible.
+
+`GET /display` is cached in Redis for 10 seconds, keyed per device, matching the
+client's poll interval — a venue with eight TVs costs roughly one database read
+per 10 seconds in total rather than eight per poll. Measured over 60 polls
+against 12 games and a 1,000-row leaderboard: **p50 5ms, p95 21ms, max 86ms**
+against a 200ms budget, with 10/10 repeat polls served from cache.
+
+Online status is computed in SQL against the database clock, so an operator's
+laptop being wrong about the time cannot make a dead display look healthy.
+
+**`quarter`, `period` and `inning` are always `null`.** They are in the response
+shape so the client can be written against the final contract, but nothing can
+populate them today: `games` has no column for in-game progress, and
+TheSportsDB's `eventsday.php` — the only endpoint `poll-games` uses — does not
+return it. Filling them in needs a different provider endpoint (livescore) plus
+a column; a single normalised `progress` string would serve all three sports
+better than three sport-specific fields.
+
+`getVenueIdFromDevice` in `device-lookup.ts` exists and is cached for an hour,
+but the authenticated routes deliberately do **not** use it: they take the venue
+id from the same statement that verified the display key. An hour-old cached
+mapping driving an access decision would let a device re-paired to a different
+venue keep reading its old venue's data.
 
 ### Game locking
 

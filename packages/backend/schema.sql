@@ -87,6 +87,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_venue_fire_tv_device_id
   ON devices (venue_id, fire_tv_device_id)
   WHERE fire_tv_device_id IS NOT NULL;
 
+-- "List every display at this venue", for the admin device-status board.
+-- PostgreSQL does not index a foreign key column automatically, and the partial
+-- index above cannot serve this: it excludes devices that have never reported a
+-- hardware id, which are exactly the ones an operator is looking for.
+CREATE INDEX IF NOT EXISTS idx_devices_venue_id
+  ON devices (venue_id);
+
 -- -----------------------------------------------------------------------------
 -- player_sessions — anonymous, nickname-only patrons. No accounts in the MVP.
 -- -----------------------------------------------------------------------------

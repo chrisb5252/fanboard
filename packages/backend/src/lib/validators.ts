@@ -62,6 +62,59 @@ export function validatePlayerSessionId(id: unknown): UUID {
   return parseUuid('playerSessionId', id);
 }
 
+export function validateDeviceId(id: unknown): UUID {
+  return parseUuid('deviceId', id);
+}
+
+export const DISPLAY_NAME_MAX_LENGTH = 64;
+export const FIRE_TV_DEVICE_ID_MAX_LENGTH = 128;
+
+/** Same whitelist rationale as nicknames: this is rendered on an operator screen. */
+const DISPLAY_NAME_ALLOWED = /^[\p{L}\p{N} '._#()/-]+$/u;
+
+export function validateDisplayName(name: unknown): string {
+  if (typeof name !== 'string') {
+    fail('displayName', 'must be a string');
+  }
+  const normalized = name.normalize('NFC').replace(/\s+/gu, ' ').trim();
+
+  if (normalized.length === 0) {
+    fail('displayName', 'must not be empty');
+  }
+  if (normalized.length > DISPLAY_NAME_MAX_LENGTH) {
+    fail('displayName', `must be at most ${DISPLAY_NAME_MAX_LENGTH} characters`);
+  }
+  if (!DISPLAY_NAME_ALLOWED.test(normalized)) {
+    fail('displayName', 'contains unsupported characters');
+  }
+  return normalized;
+}
+
+/**
+ * Hardware identifier reported by the Fire TV app. Opaque to us, so the rule is
+ * only that it is printable ASCII of a sane length -- enough to keep control
+ * characters out of the uniqueness key without guessing Amazon's format.
+ */
+const FIRE_TV_DEVICE_ID_ALLOWED = /^[A-Za-z0-9._:-]+$/;
+
+export function validateFireTvDeviceId(id: unknown): string {
+  if (typeof id !== 'string') {
+    fail('fireTvDeviceId', 'must be a string');
+  }
+  const trimmed = id.trim();
+
+  if (trimmed.length === 0) {
+    fail('fireTvDeviceId', 'must not be empty');
+  }
+  if (trimmed.length > FIRE_TV_DEVICE_ID_MAX_LENGTH) {
+    fail('fireTvDeviceId', `must be at most ${FIRE_TV_DEVICE_ID_MAX_LENGTH} characters`);
+  }
+  if (!FIRE_TV_DEVICE_ID_ALLOWED.test(trimmed)) {
+    fail('fireTvDeviceId', 'may only contain letters, numbers and . _ : -');
+  }
+  return trimmed;
+}
+
 export function validatePredictedWinner(winner: unknown): PredictedWinner {
   const result = predictedWinnerSchema.safeParse(winner);
   if (!result.success) {
