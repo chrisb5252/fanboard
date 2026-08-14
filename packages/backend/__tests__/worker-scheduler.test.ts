@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLogger } from '../src/lib/logger';
 import {
   getWorkerStatus,
@@ -183,5 +183,124 @@ describe('worker-scheduler lifecycle', () => {
 
   it('stopping when not running is a no-op', async () => {
     await expect(stopWorkers('never started', stopOpts)).resolves.toBeUndefined();
+  });
+});
+
+describe('shutdown signal handling', () => {
+  /** Captures handlers instead of raising real signals at the test runner. */
+  function captureSignals() {
+    const handlers = new Map<string, () => void>();
+    return {
+      handlers,
+      register: (signal: NodeJS.Signals, handler: () => void) => {
+        handlers.set(signal, handler);
+      },
+    };
+  }
+
+  function startWithSignals(
+    run: () => Promise<unknown>,
+    exit: (code: number) => void,
+  ): ReturnType<typeof captureSignals> {
+    const signals = captureSignals();
+    startWorkers({
+      workers: [{ name: 'drainable', intervalMs: 10_000, runImmediately: true, run }],
+      logger: silent,
+      installSignalHandlers: true,
+      registerSignalHandler: signals.register,
+      exit,
+    });
+    return signals;
+  }
+
+  it('registers handlers for both SIGTERM and SIGINT', () => {
+    const signals = startWithSignals(async () => undefined, () => undefined);
+    expect([...signals.handlers.keys()].sort()).toEqual(['SIGINT', 'SIGTERM']);
+  });
+
+  it('drains in-flight work when the signal arrives', async () => {
+    const gate = deferred();
+    let finished = false;
+
+    const signals = startWithSignals(async () => {
+      await gate.promise;
+      finished = true;
+    }, () => undefined);
+
+    await new Promise((r) => setTimeout(r, 20));
+    signals.handlers.get('SIGTERM')?.();
+
+    expect(finished).toBe(false);
+    gate.resolve();
+
+    // Let the drain settle.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(finished).toBe(true);
+    expect(getWorkerStatus().running).toBe(false);
+  });
+
+  describe('when Next owns the signals (NEXT_MANUAL_SIG_HANDLE unset)', () => {
+    const original = process.env['NEXT_MANUAL_SIG_HANDLE'];
+    beforeEach(() => {
+      delete process.env['NEXT_MANUAL_SIG_HANDLE'];
+    });
+    afterEach(() => {
+      if (original === undefined) {
+        delete process.env['NEXT_MANUAL_SIG_HANDLE'];
+      } else {
+        process.env['NEXT_MANUAL_SIG_HANDLE'] = original;
+      }
+    });
+
+    it('does not exit, because next start will', async () => {
+      const exit = vi.fn();
+      const signals = startWithSignals(async () => undefined, exit);
+
+      signals.handlers.get('SIGTERM')?.();
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(exit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('when we own the signals (NEXT_MANUAL_SIG_HANDLE set)', () => {
+    const original = process.env['NEXT_MANUAL_SIG_HANDLE'];
+    beforeEach(() => {
+      process.env['NEXT_MANUAL_SIG_HANDLE'] = '1';
+    });
+    afterEach(() => {
+      if (original === undefined) {
+        delete process.env['NEXT_MANUAL_SIG_HANDLE'];
+      } else {
+        process.env['NEXT_MANUAL_SIG_HANDLE'] = original;
+      }
+    });
+
+    it('exits 143 on SIGTERM, after the drain', async () => {
+      const gate = deferred();
+      const exit = vi.fn();
+      const signals = startWithSignals(() => gate.promise, exit);
+
+      await new Promise((r) => setTimeout(r, 20));
+      signals.handlers.get('SIGTERM')?.();
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Still draining, so nothing has exited yet.
+      expect(exit).not.toHaveBeenCalled();
+
+      gate.resolve();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(exit).toHaveBeenCalledWith(143);
+    });
+
+    it('exits 130 on SIGINT', async () => {
+      const exit = vi.fn();
+      const signals = startWithSignals(async () => undefined, exit);
+
+      signals.handlers.get('SIGINT')?.();
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(exit).toHaveBeenCalledWith(130);
+    });
   });
 });

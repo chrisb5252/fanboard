@@ -65,6 +65,12 @@ export async function query<T = SqlRow>(
 }
 
 /**
+ * The pool as an injectable SqlExecutor, so callers can depend on the narrow
+ * interface and tests can substitute a fake without touching pg.
+ */
+export const sql: SqlExecutor = { query };
+
+/**
  * Runs `work` inside BEGIN/COMMIT on a dedicated client, rolling back on any
  * throw. The client is always released, including when the rollback itself
  * fails — a leaked client would silently shrink the pool until it deadlocks.

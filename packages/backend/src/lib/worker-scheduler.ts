@@ -20,6 +20,13 @@ export interface StartWorkersOptions {
   logger?: Logger;
   /** Skip process signal handlers. Tests use this. */
   installSignalHandlers?: boolean;
+  /**
+   * Injectable so tests can drive shutdown without raising a real signal.
+   * Returns a function that removes the handler again.
+   */
+  registerSignalHandler?: (signal: NodeJS.Signals, handler: () => void) => (() => void) | void;
+  /** Injectable so tests do not terminate the runner. */
+  exit?: (code: number) => void;
 }
 
 export interface StopWorkersOptions {
@@ -43,6 +50,8 @@ interface SchedulerState {
   running: boolean;
   stopping: boolean;
   signalHandlersInstalled: boolean;
+  /** Removers for the signal handlers, run on stop so none are left dangling. */
+  signalCleanup: (() => void)[];
 }
 
 export const DEFAULT_DRAIN_TIMEOUT_MS = 15_000;
@@ -64,6 +73,7 @@ function getState(): SchedulerState {
     running: false,
     stopping: false,
     signalHandlersInstalled: false,
+    signalCleanup: [],
   };
   globalForScheduler.fanboardScheduler = created;
   return created;
@@ -179,7 +189,17 @@ export function startWorkers(options: StartWorkersOptions = {}): boolean {
   }
 
   if ((options.installSignalHandlers ?? true) && !state.signalHandlersInstalled) {
-    installSignalHandlers(log);
+    state.signalCleanup = installSignalHandlers(
+      log,
+      options.registerSignalHandler ??
+        ((signal, handler) => {
+          process.once(signal, handler);
+          return () => {
+            process.off(signal, handler);
+          };
+        }),
+      options.exit ?? ((code) => process.exit(code)),
+    );
     state.signalHandlersInstalled = true;
   }
 
@@ -255,6 +275,14 @@ export async function stopWorkers(
   state.running = false;
   state.stopping = false;
 
+  // Leave no handlers behind: a stopped scheduler that still answers SIGTERM
+  // would fire a second, pointless drain if the process is later signalled.
+  for (const remove of state.signalCleanup) {
+    remove();
+  }
+  state.signalCleanup = [];
+  state.signalHandlersInstalled = false;
+
   if (options.closeConnections ?? true) {
     await closeConnections(log);
   }
@@ -273,16 +301,60 @@ async function closeConnections(log: Logger): Promise<void> {
   }
 }
 
-function installSignalHandlers(log: Logger): void {
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => {
-      log.info('shutdown signal received', { signal });
-      void stopWorkers(signal).catch((error: unknown) => {
-        log.error('graceful shutdown failed', { signal, error });
-      });
-    });
+/** Exit codes Node uses for signal termination: 128 + signal number. */
+const EXIT_CODE_BY_SIGNAL: Record<string, number> = { SIGINT: 130, SIGTERM: 143 };
+
+/**
+ * Whether `next start` has left shutdown to us.
+ *
+ * `next start` registers its own SIGTERM/SIGINT handlers *before* the app is
+ * loaded, and its cleanup ends in process.exit(). Node runs signal listeners in
+ * registration order, so Next's runs first and terminates the process before an
+ * async drain here could finish. Next's documented opt-out is
+ * NEXT_MANUAL_SIG_HANDLE — when it is set Next installs nothing, and the
+ * responsibility for both draining *and* exiting becomes ours.
+ */
+function weOwnShutdown(): boolean {
+  return process.env['NEXT_MANUAL_SIG_HANDLE'] !== undefined;
+}
+
+function installSignalHandlers(
+  log: Logger,
+  register: (signal: NodeJS.Signals, handler: () => void) => (() => void) | void,
+  exit: (code: number) => void,
+): (() => void)[] {
+  const owned = weOwnShutdown();
+  const cleanup: (() => void)[] = [];
+
+  if (!owned) {
+    log.warn(
+      'NEXT_MANUAL_SIG_HANDLE is not set: next start will exit on SIGTERM before workers can drain',
+      { remedy: 'set NEXT_MANUAL_SIG_HANDLE=1 in the runtime environment' },
+    );
   }
-  log.debug('signal handlers installed', { signals: ['SIGTERM', 'SIGINT'] });
+
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    const remove = register(signal, () => {
+      log.info('shutdown signal received', { signal });
+      void stopWorkers(signal)
+        .catch((error: unknown) => {
+          log.error('graceful shutdown failed', { signal, error });
+        })
+        .finally(() => {
+          // Only exit when Next is not going to. Calling it otherwise would
+          // race Next's own exit and truncate its cleanup.
+          if (owned) {
+            exit(EXIT_CODE_BY_SIGNAL[signal] ?? 128);
+          }
+        });
+    });
+    if (typeof remove === 'function') {
+      cleanup.push(remove);
+    }
+  }
+
+  log.debug('signal handlers installed', { signals: ['SIGTERM', 'SIGINT'], ownsExit: owned });
+  return cleanup;
 }
 
 /** Introspection for health endpoints and tests. */

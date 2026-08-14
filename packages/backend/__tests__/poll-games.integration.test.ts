@@ -83,16 +83,25 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('poll-games against real Postgr
     worker = await import('../src/workers/poll-games');
   });
 
+  /**
+   * Vitest runs test files in parallel against one database, so cleanup must
+   * only ever remove rows this file created. A blanket `DELETE FROM venues`
+   * cascades into whatever another file is midway through.
+   */
+  const VENUE_PREFIX = 'pollgames-int';
+  const cleanup = () =>
+    db.query('DELETE FROM venues WHERE name LIKE $1', [`${VENUE_PREFIX}-%`]);
+
   afterAll(async () => {
-    await db.query('DELETE FROM venues');
+    await cleanup();
     await db.closePool();
   });
 
   beforeEach(async () => {
-    await db.query('DELETE FROM venues');
+    await cleanup();
     const inserted = await db.query<{ id: string }>(
       'INSERT INTO venues (name, api_key) VALUES ($1, $2) RETURNING id',
-      ['Integration Venue', `key-${Date.now()}-${Math.random()}`],
+      [`${VENUE_PREFIX}-primary`, `key-${Date.now()}-${Math.random()}`],
     );
     const row = inserted.rows[0];
     if (row === undefined) {

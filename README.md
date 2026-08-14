@@ -169,12 +169,28 @@ src/lib/worker-scheduler.ts   interval timers, overlap guard, graceful drain
 src/workers/poll-games.ts     every 30s: provider -> normalize -> upsert
 src/lib/sports-provider.ts    abstract SportsProvider + NormalizedGame
 src/lib/thesportsdb.ts        TheSportsDBProvider implementation
+src/lib/auth.ts               session / admin / device route guards
+src/lib/tokens.ts             token generation and SHA-256 hashing
+src/lib/validators.ts         Zod input validation, branded UUID type
+src/lib/errors.ts             ApiError and client-safe error rendering
+src/lib/cache-keys.ts         Redis key builders in one place
+src/services/players.ts       create a player session
+src/services/picks.ts         submit a pick, with the atomic lock check
+src/app/api/venues/[venueId]/players/route.ts
+src/app/api/venues/[venueId]/picks/route.ts
 src/lib/db.ts                 pooled pg, query(), withTransaction()
 src/lib/redis.ts              client singleton, get()/set()/del()
 src/lib/logger.ts             structured JSON logs with secret redaction
 src/lib/env.ts                lazy, Zod-validated environment
 src/lib/health.ts             shared probe shape for dependency checks
 ```
+
+### API
+
+| Route | Auth | Success | Failures |
+| --- | --- | --- | --- |
+| `POST /api/venues/:venueId/players` | none | 201 + cookie | 400, 404 |
+| `POST /api/venues/:venueId/picks` | session cookie | 201 new · 200 changed | 400, 401, 403, 404, 423 |
 
 The graph is acyclic (verified with `madge --circular`); `logger`, `env`,
 `health` and `sports-provider` are leaves.
@@ -186,6 +202,74 @@ component: it is evaluated during static prerendering at `next build` — which
 would start a scheduler on a CI runner with no database — and again on every
 request. `register()` runs once, per server process, which is what a scheduler
 needs. Set `WORKERS_ENABLED=false` to boot the server without it.
+
+### Authentication
+
+Three route-level guards in `src/lib/auth.ts`: `sessionMiddleware` (patron
+cookie), `adminMiddleware` (venue API key), `deviceMiddleware` (display key).
+
+They are **not** Next.js middleware. Real `middleware.ts` runs on the Edge
+runtime, which cannot open the TCP sockets pg and redis need, so a credential
+check there would have nothing to check against. These are called at the top of
+a route handler and return a verified context or throw an `ApiError`.
+
+**Every credential column stores a SHA-256 hash, never the raw value.** A leaked
+dump or an over-broad SELECT yields hashes, not working credentials. Provision a
+venue with:
+
+```sql
+INSERT INTO venues (name, api_key) VALUES ('The Anchor', encode(sha256('your-raw-key'::bytea), 'hex'));
+```
+
+Session cookies are `HttpOnly; Secure; SameSite=Lax; Path=/`. Lax rather than
+Strict because patrons arrive by scanning a QR code and Strict would withhold
+the cookie on that first navigation; Lax still withholds it on cross-site POSTs,
+which is the CSRF case. `COOKIE_SECURE=false` exists for LAN deployments without
+TLS — see `.env.example`.
+
+`assertVenueScope` rejects a valid session acting on a different venue than the
+one in the URL. Without it, changing the venue id in the path would be enough.
+
+### Game locking
+
+The pick write is one statement:
+
+```sql
+WITH open_game AS (SELECT ... WHERE COALESCE(locked_at, scheduled_at) > NOW() AND status = 'scheduled')
+INSERT INTO picks ... SELECT ... FROM open_game ON CONFLICT ... DO UPDATE ...
+```
+
+The check-then-write alternative is a TOCTOU race, and the gap is widest exactly
+when everyone is submitting. Here PostgreSQL evaluates "is it open?" and "write
+the pick" atomically. Consequences:
+
+- `NOW()` is the **database's** clock. No timestamp from the client is read,
+  parsed or trusted anywhere in this path.
+- `COALESCE(locked_at, scheduled_at)` lets an operator close picks early by
+  setting `locked_at`, without touching the schedule.
+- A conflicting row only updates when the same predicate held, so an existing
+  pick cannot be edited after lock either.
+- Zero rows means "not written" and deliberately does not say why; the caller
+  re-reads the game to tell 404 from 423.
+
+Redis (`game:{id}:locked_at`) is a fast path in front of this, never the source
+of truth: a present key is trusted for rejection because locks never lift, an
+absent key falls through to the database, and a Redis outage degrades to the
+database rather than failing writes.
+
+### Shutdown: NEXT_MANUAL_SIG_HANDLE
+
+`next start` registers `process.on('SIGTERM', cleanup)` **before** the app loads,
+and that cleanup ends in `process.exit(143)`. Node runs signal listeners in
+registration order, so Next's fires first and kills the process before the
+worker drain can finish — on Linux as much as anywhere.
+
+Set `NEXT_MANUAL_SIG_HANDLE=1` in the runtime environment and Next installs
+nothing; `worker-scheduler.ts` then drains, closes the pool and Redis, and exits
+143 (or 130 for SIGINT) itself. Without it the scheduler logs a warning at
+startup. Note that when we own the signals, Next no longer closes the HTTP
+server on shutdown; draining in-flight requests as well as workers is the next
+step there.
 
 ### poll-games
 

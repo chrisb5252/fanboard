@@ -1,0 +1,133 @@
+import { z } from 'zod';
+import { ApiError } from './errors';
+
+declare const uuidBrand: unique symbol;
+
+/**
+ * A string that has been through UUID validation.
+ *
+ * Branded so an unvalidated string cannot be passed where an id is expected —
+ * the compiler enforces that every id reaching a query has been checked.
+ */
+export type UUID = string & { readonly [uuidBrand]: true };
+
+/**
+ * Deliberately permissive about version and variant nibbles: this must accept
+ * exactly what PostgreSQL's own `uuid` type accepts, and Postgres does not care
+ * which RFC version the value claims to be. A stricter v4-only pattern would
+ * reject legitimate ids (and every hand-written fixture).
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const uuidSchema = z.string().regex(UUID_PATTERN, 'must be a UUID');
+
+export const PREDICTED_WINNERS = ['home', 'away'] as const;
+export type PredictedWinner = (typeof PREDICTED_WINNERS)[number];
+
+const predictedWinnerSchema = z.enum(PREDICTED_WINNERS);
+
+export const NICKNAME_MAX_LENGTH = 50;
+
+/**
+ * Nickname whitelist: letters and digits in any script, plus spaces and a small
+ * set of joiners. A whitelist (rather than a blacklist of "special characters")
+ * is what keeps control characters, zero-width joiners, bidi overrides and
+ * markup out — none of those fall in \p{L} or \p{N}.
+ */
+const NICKNAME_ALLOWED = /^[\p{L}\p{N} '._-]+$/u;
+/** Must carry at least one letter or digit, so "---" is not a nickname. */
+const NICKNAME_HAS_SUBSTANCE = /[\p{L}\p{N}]/u;
+
+function fail(field: string, message: string): never {
+  throw ApiError.badRequest(`${field} ${message}`, { field });
+}
+
+function parseUuid(field: string, value: unknown): UUID {
+  const result = uuidSchema.safeParse(value);
+  if (!result.success) {
+    fail(field, 'must be a UUID');
+  }
+  return result.data.toLowerCase() as UUID;
+}
+
+export function validateVenueId(id: unknown): UUID {
+  return parseUuid('venueId', id);
+}
+
+export function validateGameId(id: unknown): UUID {
+  return parseUuid('gameId', id);
+}
+
+export function validatePlayerSessionId(id: unknown): UUID {
+  return parseUuid('playerSessionId', id);
+}
+
+export function validatePredictedWinner(winner: unknown): PredictedWinner {
+  const result = predictedWinnerSchema.safeParse(winner);
+  if (!result.success) {
+    fail('predictedWinner', `must be one of: ${PREDICTED_WINNERS.join(', ')}`);
+  }
+  return result.data;
+}
+
+/**
+ * Normalises then validates a nickname.
+ *
+ * Normalisation runs first and is part of the security boundary:
+ *  - NFC folds combining-character sequences that would otherwise render
+ *    identically to an existing nickname while comparing as distinct;
+ *  - internal whitespace is collapsed so "a      b" cannot be used to shove a
+ *    name across a TV leaderboard.
+ *
+ * The 50-character ceiling matches the player_sessions_nickname_check
+ * constraint. If the two ever drift, an over-long nickname stops being a clean
+ * 400 and becomes a constraint violation surfaced as a 500.
+ */
+export function validateNickname(nick: unknown): string {
+  if (typeof nick !== 'string') {
+    fail('nickname', 'must be a string');
+  }
+
+  const normalized = nick.normalize('NFC').replace(/\s+/gu, ' ').trim();
+
+  if (normalized.length === 0) {
+    fail('nickname', 'must not be empty');
+  }
+  if (normalized.length > NICKNAME_MAX_LENGTH) {
+    fail('nickname', `must be at most ${NICKNAME_MAX_LENGTH} characters`);
+  }
+  if (!NICKNAME_ALLOWED.test(normalized)) {
+    fail('nickname', 'may only contain letters, numbers, spaces and . _ - \'');
+  }
+  if (!NICKNAME_HAS_SUBSTANCE.test(normalized)) {
+    fail('nickname', 'must contain at least one letter or number');
+  }
+
+  return normalized;
+}
+
+/**
+ * Asserts a value that is already known to be a UUID — ids read back out of the
+ * database, which the `uuid` column type has already guaranteed.
+ *
+ * Never call this on anything that came from a request.
+ */
+export function trustedUuid(value: string): UUID {
+  return value as UUID;
+}
+
+/** Parses a JSON request body, turning malformed JSON into a clean 400. */
+export async function parseJsonBody(request: Request): Promise<Record<string, unknown>> {
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    throw ApiError.badRequest('Request body must be valid JSON');
+  }
+
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw ApiError.badRequest('Request body must be a JSON object');
+  }
+
+  return raw as Record<string, unknown>;
+}

@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS venues (
 
 COMMENT ON TABLE venues IS 'Tenant root; every other table cascades from here.';
 COMMENT ON COLUMN venues.api_key IS
-  'Venue-scoped API credential. Store a hash (e.g. sha256) rather than the raw key before going to production.';
+  'SHA-256 hash of the venue API key. Provision with: encode(sha256(''<raw key>''::bytea), ''hex'')';
 
 DROP TRIGGER IF EXISTS venues_set_updated_at ON venues;
 CREATE TRIGGER venues_set_updated_at
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS devices (
 COMMENT ON COLUMN devices.fire_tv_device_id IS
   'Hardware identifier reported by the Fire TV app; NULL until the device first checks in.';
 COMMENT ON COLUMN devices.display_key IS
-  'Short human-readable pairing code shown on the TV during setup.';
+  'SHA-256 hash of the pairing code shown on the TV. Short codes are low entropy: exchange for a long random device token at pairing time.';
 COMMENT ON COLUMN devices.last_heartbeat IS
   'Last successful check-in; drives the "offline display" alert in admin-web.';
 
@@ -94,7 +94,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_venue_fire_tv_device_id
 CREATE TABLE IF NOT EXISTS player_sessions (
   id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   venue_id      UUID        NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
-  nickname      TEXT        NOT NULL CHECK (length(btrim(nickname)) BETWEEN 1 AND 24),
+  nickname      TEXT        NOT NULL CHECK (length(btrim(nickname)) BETWEEN 1 AND 50),
   session_token TEXT        NOT NULL UNIQUE,
   last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -104,8 +104,16 @@ CREATE TABLE IF NOT EXISTS player_sessions (
   CONSTRAINT player_sessions_venue_id_id_key UNIQUE (venue_id, id)
 );
 
+-- Widen an already-initialised database to match. The inline CHECK above only
+-- applies on first creation, so existing volumes need this to stay in step with
+-- validateNickname()'s 50-character ceiling. If the two drift, an over-long
+-- nickname stops being a clean 400 and becomes a constraint violation.
+ALTER TABLE player_sessions DROP CONSTRAINT IF EXISTS player_sessions_nickname_check;
+ALTER TABLE player_sessions ADD CONSTRAINT player_sessions_nickname_check
+  CHECK (length(btrim(nickname)) BETWEEN 1 AND 50);
+
 COMMENT ON COLUMN player_sessions.session_token IS
-  'Opaque bearer token held in the phone browser. Store a hash before going to production.';
+  'SHA-256 hash of the bearer token held in the phone browser. The raw token is never stored.';
 COMMENT ON COLUMN player_sessions.expired IS
   'Soft-expiry flag. Set by the reaper job so historical picks and leaderboards stay intact.';
 
