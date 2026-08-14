@@ -1,0 +1,83 @@
+/*
+ * 10-foot UI. Read from across a bar, driven by a D-pad remote.
+ *  - Everything sits inside a 5% overscan-safe margin.
+ *  - Base type is 24px; nothing meaningful is smaller than 20px.
+ *  - Focus is always visible: the remote gives no cursor to fall back on.
+ */
+
+:root {
+  color-scheme: dark;
+  --bg: #05070d;
+  --panel: #0f1523;
+  --fg: #f5f7fb;
+  --muted: #97a1b8;
+  --line: #1e2739;
+  --accent: #fbbf24;
+  --overscan: 5%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 24px;
+  line-height: 1.4;
+  /* No pointer on a TV — a scrollbar would only ever be dead pixels. */
+  overflow: hidden;
+}
+
+:focus-visible {
+  outline: 4px solid var(--accent);
+  outline-offset: 6px;
+  border-radius: 6px;
+}
+
+.stage {
+  height: 100%;
+  padding: var(--overscan);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.badge {
+  align-self: flex-start;
+  padding: 0.2rem 0.7rem;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+h1 {
+  margin: 1.5rem 0 0;
+  font-size: 4rem;
+  letter-spacing: -0.03em;
+}
+
+.lede {
+  margin: 1rem 0 0;
+  max-width: 24ch;
+  color: var(--muted);
+  font-size: 1.5rem;
+}
+
+.port {
+  margin: 2.5rem 0 0;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.25rem;
+}

@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same branch cancels the run already in flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  verify:
+    name: Type-check, lint, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify all packages produced build output
+        run: |
+          set -euo pipefail
+
+          echo "backend (Next.js)"
+          test -f packages/backend/.next/BUILD_ID \
+            || { echo "::error::packages/backend produced no .next/BUILD_ID"; exit 1; }
+
+          for pkg in admin-web mobile-web fire-tv; do
+            echo "$pkg (Vite)"
+            test -f "packages/$pkg/dist/index.html" \
+              || { echo "::error::packages/$pkg produced no dist/index.html"; exit 1; }
+            # index.html alone can be a stale copy; require a hashed bundle too.
+            ls packages/"$pkg"/dist/assets/*.js >/dev/null 2>&1 \
+              || { echo "::error::packages/$pkg produced no JS bundle"; exit 1; }
+          done
+
+          echo "All 4 packages built successfully."
+
+  infra:
+    name: Validate compose file and schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fanboard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fanboard"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGPASSWORD: postgres
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fanboard
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+
+      - name: Apply schema.sql
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/backend/schema.sql
+
+      - name: Re-apply schema.sql (must be idempotent)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f packages/backend/schema.sql
+
+      - name: Verify expected tables exist
+        run: |
+          set -euo pipefail
+          for table in venues devices games picks player_sessions leaderboard_snapshot; do
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SELECT to_regclass('public.$table') IS NOT NULL AS ok" \
+              | grep -q ' t$' || { echo "::error::table $table is missing"; exit 1; }
+          done
+          echo "All 6 tables present."

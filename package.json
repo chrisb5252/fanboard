@@ -1,0 +1,37 @@
+{
+  "name": "fanboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FanBoard — venue-hosted live sports prediction game (MVP infrastructure)",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "type-check": "npm run type-check --workspaces --if-present",
+    "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "dev:backend": "npm run dev --workspace @fanboard/backend",
+    "dev:admin": "npm run dev --workspace @fanboard/admin-web",
+    "dev:mobile": "npm run dev --workspace @fanboard/mobile-web",
+    "dev:tv": "npm run dev --workspace @fanboard/fire-tv",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d",
+    "infra:logs": "docker compose logs -f",
+    "infra:validate": "docker compose config --quiet"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "typescript": "^5.9.3"
+  }
+}

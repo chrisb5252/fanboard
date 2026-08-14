@@ -1,0 +1,77 @@
+# FanBoard local infrastructure.
+#
+#   docker compose up -d        start postgres + redis
+#   docker compose down         stop, keep data
+#   docker compose down -v      stop and wipe data (re-runs schema.sql on next up)
+#
+# schema.sql is applied by the postgres entrypoint only on FIRST boot of the
+# named volume. Use `down -v` (or `npm run infra:reset`) to re-apply it.
+
+name: fanboard
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: fanboard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-fanboard}
+      # Deterministic collation so ORDER BY nickname matches across machines.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./packages/backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-fanboard}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - fanboard-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: fanboard-redis
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - fanboard-network
+
+volumes:
+  postgres-data:
+    name: fanboard-postgres-data
+  redis-data:
+    name: fanboard-redis-data
+
+networks:
+  fanboard-network:
+    name: fanboard-network
+    driver: bridge

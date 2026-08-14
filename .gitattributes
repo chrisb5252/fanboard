@@ -1,0 +1,18 @@
+# Normalise to LF in the repository. Developers are on Windows; CI and the
+# containers are Linux. Without this, schema.sql and the workflow YAML get
+# committed with CRLF and behave differently in each place.
+* text=auto eol=lf
+
+# Never touched by the eol rules above.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+# Generated: collapse in diffs and exclude from language stats.
+package-lock.json linguist-generated=true -diff
