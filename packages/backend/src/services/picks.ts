@@ -79,7 +79,7 @@ SELECT open_game.venue_id, open_game.id, $3::uuid, $4::text, NOW()
 ON CONFLICT (game_id, player_session_id) DO UPDATE
    SET predicted_winner = EXCLUDED.predicted_winner,
        submitted_at     = NOW(),
-       points           = 0,
+       points           = NULL,
        correct          = NULL,
        graded_at        = NULL
 RETURNING id, (xmax = 0) AS inserted

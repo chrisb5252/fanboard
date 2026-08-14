@@ -69,6 +69,18 @@ export async function del(key: string): Promise<number> {
   return client.del(key);
 }
 
+/**
+ * Publishes to a channel, returning the number of subscribers that received it.
+ *
+ * Fire-and-forget by design: with no subscriber connected the message is
+ * dropped, which is the correct behaviour for a live-update nudge. Anything
+ * that must not be missed belongs in the database, not here.
+ */
+export async function publish(channel: string, message: string): Promise<number> {
+  const client = await getConnectedRedis();
+  return client.publish(channel, message);
+}
+
 /** Liveness probe used by health checks and infrastructure smoke tests. */
 export async function pingRedis(): Promise<boolean> {
   const client = await getConnectedRedis();

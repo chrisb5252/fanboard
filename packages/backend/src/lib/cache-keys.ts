@@ -20,5 +20,23 @@ export function venuePicksKey(venueId: string): string {
   return `venue:${venueId}:picks`;
 }
 
+/** Cached leaderboard payload, keyed by venue and requested period. */
+export function leaderboardKey(venueId: string, period: string): string {
+  return `leaderboard:${venueId}:${period}`;
+}
+
+/**
+ * Pub/sub channel announcing that a game finished grading.
+ *
+ * The WebSocket fan-out layer does not exist yet; publishing to Redis now means
+ * it can subscribe later without the grading worker changing.
+ */
+export function gradingChannel(venueId: string): string {
+  return `venue:${venueId}:graded`;
+}
+
 /** How long a discovered lock is remembered. Locks never un-lock. */
 export const GAME_LOCK_TTL_SECONDS = 3600;
+
+/** Leaderboards are recomputed on a 5 minute cadence; 60s keeps reads fresh. */
+export const LEADERBOARD_TTL_SECONDS = 60;

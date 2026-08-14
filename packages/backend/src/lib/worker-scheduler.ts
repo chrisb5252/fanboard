@@ -2,10 +2,20 @@ import { closePool } from './db';
 import { logger as rootLogger, type Logger } from './logger';
 import { closeRedis } from './redis';
 import {
+  GRADE_GAMES_INTERVAL_MS,
+  GRADE_GAMES_WORKER_NAME,
+  gradeGamesOnce,
+} from '../workers/grade-games';
+import {
   POLL_GAMES_INTERVAL_MS,
   POLL_GAMES_WORKER_NAME,
   pollGamesOnce,
 } from '../workers/poll-games';
+import {
+  UPDATE_LEADERBOARD_INTERVAL_MS,
+  UPDATE_LEADERBOARD_WORKER_NAME,
+  updateLeaderboardsOnce,
+} from '../workers/update-leaderboard';
 
 export interface WorkerDefinition {
   readonly name: string;
@@ -52,6 +62,8 @@ interface SchedulerState {
   signalHandlersInstalled: boolean;
   /** Removers for the signal handlers, run on stop so none are left dangling. */
   signalCleanup: (() => void)[];
+  /** Logger supplied at start, so stopWorkers reports through the same sink. */
+  logger: Logger | null;
 }
 
 export const DEFAULT_DRAIN_TIMEOUT_MS = 15_000;
@@ -74,6 +86,7 @@ function getState(): SchedulerState {
     stopping: false,
     signalHandlersInstalled: false,
     signalCleanup: [],
+    logger: null,
   };
   globalForScheduler.fanboardScheduler = created;
   return created;
@@ -86,6 +99,30 @@ function defaultWorkers(): WorkerDefinition[] {
       intervalMs: POLL_GAMES_INTERVAL_MS,
       runImmediately: true,
       run: () => pollGamesOnce(),
+    },
+    {
+      name: GRADE_GAMES_WORKER_NAME,
+      intervalMs: GRADE_GAMES_INTERVAL_MS,
+      runImmediately: true,
+      // Grading and leaderboard materialisation are chained rather than run as
+      // independent timers: a settled game that waits up to 5 minutes for the
+      // next leaderboard tick is a scoreboard the room can see is wrong. The
+      // 5 minute timer below still runs, and covers picks graded by any other
+      // path plus the rolling "today"/"this_week" window boundaries.
+      run: async () => {
+        const graded = await gradeGamesOnce();
+        if (graded.gamesGraded > 0 || graded.gamesVoided > 0) {
+          const refreshed = await updateLeaderboardsOnce();
+          return { graded, refreshed };
+        }
+        return { graded };
+      },
+    },
+    {
+      name: UPDATE_LEADERBOARD_WORKER_NAME,
+      intervalMs: UPDATE_LEADERBOARD_INTERVAL_MS,
+      runImmediately: false,
+      run: () => updateLeaderboardsOnce(),
     },
   ];
 }
@@ -152,6 +189,7 @@ export function startWorkers(options: StartWorkersOptions = {}): boolean {
   const definitions = options.workers ?? defaultWorkers();
   state.running = true;
   state.stopping = false;
+  state.logger = log;
 
   for (const definition of definitions) {
     if (state.workers.has(definition.name)) {
@@ -216,7 +254,9 @@ export async function stopWorkers(
   options: StopWorkersOptions = {},
 ): Promise<void> {
   const state = getState();
-  const log = rootLogger.child({ component: 'worker-scheduler' });
+  // Report through whatever sink start was given, so a silenced scheduler stays
+  // silent through shutdown too.
+  const log = state.logger ?? rootLogger.child({ component: 'worker-scheduler' });
 
   if (!state.running || state.stopping) {
     log.debug('scheduler not running; stop ignored', { reason });
@@ -282,6 +322,7 @@ export async function stopWorkers(
   }
   state.signalCleanup = [];
   state.signalHandlersInstalled = false;
+  state.logger = null;
 
   if (options.closeConnections ?? true) {
     await closeConnections(log);

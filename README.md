@@ -191,6 +191,7 @@ src/lib/health.ts             shared probe shape for dependency checks
 | --- | --- | --- | --- |
 | `POST /api/venues/:venueId/players` | none | 201 + cookie | 400, 404 |
 | `POST /api/venues/:venueId/picks` | session cookie | 201 new · 200 changed | 400, 401, 403, 404, 423 |
+| `GET /api/venues/:venueId/leaderboard?period=` | none (public) | 200 | 400 |
 
 The graph is acyclic (verified with `madge --circular`); `logger`, `env`,
 `health` and `sports-provider` are leaves.
@@ -270,6 +271,81 @@ nothing; `worker-scheduler.ts` then drains, closes the pool and Redis, and exits
 startup. Note that when we own the signals, Next no longer closes the HTTP
 server on shutdown; draining in-flight requests as well as workers is the next
 step there.
+
+### Grading and leaderboards
+
+`grade-games` runs every 2 minutes; `update-leaderboard` every 5, and also
+immediately after any grading run that settled something — a scoreboard the room
+can see is wrong is worse than an extra query.
+
+**Candidates are chosen by `graded_at IS NULL`, not `status <> 'final'`.**
+poll-games sets status to `final` the moment the provider reports it, so a
+status filter would skip exactly the games that are ready and they would never
+settle.
+
+**Picks grade in one statement.** "Load the picks, loop, update each" is an N+1
+in disguise; the scoring rule is expressible in SQL, so 10,000 rows never leave
+the database. Game update and pick grading share a transaction, so a game is
+never marked graded with its picks unscored.
+
+**Picks have three states**, enforced by `picks_grading_consistency`:
+
+| state | `graded_at` | `correct` | `points` |
+| --- | --- | --- | --- |
+| ungraded | NULL | NULL | NULL |
+| graded | set | TRUE/FALSE | 10 / 0 |
+| voided (cancelled game) | set | NULL | NULL |
+
+Voided picks are excluded from the leaderboard entirely — a cancelled game is
+neither a win nor a loss. Voided is distinguishable from ungraded only by
+`graded_at`, which is why grading always stamps it.
+
+A `final` game with no winner (scores missing upstream) is **not** graded: it
+would violate `games_graded_requires_winner`, so it waits for a later poll.
+
+### Leaderboard
+
+`computeLeaderboard(venueId, period)` aggregates, ranks, replaces the stored
+snapshot and returns it — all in one statement. The `DELETE` runs as a
+data-modifying CTE, which always executes to completion and sees the same table
+snapshot as the `INSERT`, so a reader gets either the old board or the new one,
+never an empty table mid-swap.
+
+Ranking is points DESC, then wins DESC, then earliest pick, then id — fully
+deterministic, so two runs over identical data produce identical ranks.
+
+Periods use two vocabularies and `PERIOD_TO_SNAPSHOT` in `leaderboard.ts` is the
+only place they meet: the API takes `today` / `this_week` / `all_time`, while
+`leaderboard_snapshot.period` is constrained to `daily` / `weekly` / `all_time`.
+Passing a storage name such as `daily` to the API is a 400.
+
+**Timezone caveat:** `date_trunc` runs in the database's timezone (UTC), so
+"today" rolls over at 00:00 UTC rather than the venue's local midnight. A bar
+closing at 01:00 local sees its evening split across two boards. Fixing this
+properly needs a timezone column on `venues`.
+
+### Measured performance
+
+25 venues, 250,000 picks, Postgres 15 in Docker:
+
+| operation | measured | budget |
+| --- | --- | --- |
+| grade 10,000 picks (10 games) | 169 ms | 5,000 ms |
+| compute leaderboard (1,000 players) | 31–36 ms | 500 ms |
+| read snapshot | 5 ms | 500 ms |
+
+`EXPLAIN ANALYZE` on the leaderboard aggregate shows a Bitmap Index Scan on
+`idx_picks_leaderboard` (4.9 ms). Note that with a *single* venue owning the
+whole table the planner correctly prefers a sequential scan — the index only
+earns its place once venue_id is selective, which is why the numbers above were
+taken across 25 venues rather than one.
+
+**`idx_picks_graded_at_venue_id` is unused.** It was requested explicitly and is
+created, but `pg_stat_user_indexes` reports `scans=0` against the workload above
+while `idx_picks_leaderboard` took 64 and `idx_picks_ungraded_by_game` 68. No
+query leads with `graded_at`. It costs write amplification on every pick insert
+and grade for no read benefit; drop it unless a "recently graded across all
+venues" query appears.
 
 ### poll-games
 

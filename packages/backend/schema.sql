@@ -167,6 +167,14 @@ COMMENT ON COLUMN games.cancelled IS
 CREATE INDEX IF NOT EXISTS idx_games_venue_scheduled_at
   ON games (venue_id, scheduled_at);
 
+-- The grading worker's candidate scan, every 2 minutes forever. Partial, so it
+-- holds only unsettled games and shrinks as games are graded. At the scale
+-- measured here (240 games) the planner still prefers a sequential scan, which
+-- is correct; this exists so the scan does not degrade as a season accumulates.
+CREATE INDEX IF NOT EXISTS idx_games_awaiting_grading
+  ON games (scheduled_at)
+  WHERE graded_at IS NULL AND cancelled = FALSE;
+
 CREATE INDEX IF NOT EXISTS idx_games_external_id
   ON games (external_id);
 
@@ -185,7 +193,7 @@ CREATE TABLE IF NOT EXISTS picks (
   game_id           UUID        NOT NULL,
   player_session_id UUID        NOT NULL,
   predicted_winner  TEXT        NOT NULL CHECK (predicted_winner IN ('home', 'away', 'draw')),
-  points            INTEGER     NOT NULL DEFAULT 0,
+  points            INTEGER,
   correct           BOOLEAN,
   submitted_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   graded_at         TIMESTAMPTZ,
@@ -201,19 +209,71 @@ CREATE TABLE IF NOT EXISTS picks (
     FOREIGN KEY (venue_id, player_session_id)
     REFERENCES player_sessions (venue_id, id) ON DELETE CASCADE,
 
-  -- graded_at and correct are set together by the grading job, or neither is set.
-  CONSTRAINT picks_graded_consistency
-    CHECK ((graded_at IS NULL) = (correct IS NULL))
+  -- Three legal states, and nothing else:
+  --   ungraded  graded_at NULL,     correct NULL,     points NULL
+  --   graded    graded_at NOT NULL, correct NOT NULL, points NOT NULL
+  --   voided    graded_at NOT NULL, correct NULL,     points NULL
+  -- Voided is how a cancelled game settles: the pick is finished with, but it
+  -- counts as neither a win nor a loss. It is distinguishable from ungraded
+  -- only by graded_at, which is why grading must always stamp it.
+  CONSTRAINT picks_grading_consistency
+    CHECK (
+      (correct IS NULL) = (points IS NULL)
+      AND (correct IS NULL OR graded_at IS NOT NULL)
+    )
 );
 
-COMMENT ON COLUMN picks.correct IS 'NULL while ungraded; TRUE/FALSE once the game is graded.';
-COMMENT ON COLUMN picks.points IS 'Points awarded at grading time. 0 until graded, and 0 for a wrong pick.';
+COMMENT ON COLUMN picks.correct IS
+  'NULL while ungraded and for voided picks; TRUE/FALSE once graded. Pair with graded_at to tell those apart.';
+COMMENT ON COLUMN picks.points IS
+  'NULL until graded and for voided picks; 0 for a wrong pick. Always NULL exactly when correct is NULL.';
+
+-- Bring an already-initialised database in line with the three-state model
+-- above. The inline definitions only apply on first creation.
+ALTER TABLE picks ALTER COLUMN points DROP DEFAULT;
+ALTER TABLE picks ALTER COLUMN points DROP NOT NULL;
+-- Existing ungraded rows carry the old NOT NULL DEFAULT 0; NULL is what the new
+-- constraint requires of them.
+UPDATE picks SET points = NULL WHERE graded_at IS NULL AND points IS NOT NULL;
+ALTER TABLE picks DROP CONSTRAINT IF EXISTS picks_graded_consistency;
+ALTER TABLE picks DROP CONSTRAINT IF EXISTS picks_grading_consistency;
+ALTER TABLE picks ADD CONSTRAINT picks_grading_consistency
+  CHECK (
+    (correct IS NULL) = (points IS NULL)
+    AND (correct IS NULL OR graded_at IS NOT NULL)
+  );
 
 CREATE INDEX IF NOT EXISTS idx_picks_venue_player_session_id
   ON picks (venue_id, player_session_id);
 
 CREATE INDEX IF NOT EXISTS idx_picks_game_id
   ON picks (game_id);
+
+-- The grading worker's hot path: "every ungraded pick on this game". Partial,
+-- so it stays small -- once a game is graded its picks leave the index.
+CREATE INDEX IF NOT EXISTS idx_picks_ungraded_by_game
+  ON picks (game_id)
+  WHERE graded_at IS NULL;
+
+-- The leaderboard aggregate: venue-scoped, windowed on created_at, counting
+-- only settled picks. INCLUDE carries the aggregated columns so the scan never
+-- has to visit the heap.
+CREATE INDEX IF NOT EXISTS idx_picks_leaderboard
+  ON picks (venue_id, created_at)
+  INCLUDE (player_session_id, points, correct, submitted_at)
+  WHERE correct IS NOT NULL;
+
+-- Requested as picks(graded_at, venue_id).
+--
+-- MEASURED: unused. Against 250k picks across 25 venues, pg_stat_user_indexes
+-- reported scans=0 for this index while idx_picks_leaderboard took 60 scans and
+-- idx_picks_ungraded_by_game 58. No query in the codebase leads with graded_at:
+-- the leaderboard aggregate is venue-first, and the grading worker filters on
+-- game_id. It costs write amplification on every pick insert and grade for no
+-- read benefit. Kept because it was explicitly requested; drop it unless a
+-- "recently graded across all venues" query appears.
+CREATE INDEX IF NOT EXISTS idx_picks_graded_at_venue_id
+  ON picks (graded_at, venue_id);
 
 -- -----------------------------------------------------------------------------
 -- leaderboard_snapshot — precomputed standings, read directly by the TV app.
