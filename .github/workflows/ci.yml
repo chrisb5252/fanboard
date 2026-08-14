@@ -43,6 +43,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test
+        run: npm run test
+
       - name: Build
         run: npm run build
 
@@ -110,3 +113,19 @@ jobs:
               | grep -q ' t$' || { echo "::error::table $table is missing"; exit 1; }
           done
           echo "All 6 tables present."
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # These are skipped in the `verify` job, which has no database. This is
+      # the only place the UNNEST upsert runs against real PostgreSQL.
+      - name: Integration tests against live PostgreSQL
+        run: npm run test --workspace @fanboard/backend
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fanboard

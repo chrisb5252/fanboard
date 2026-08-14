@@ -1,5 +1,7 @@
 import { createClient } from 'redis';
 import { getEnv } from './env';
+import { probe, type HealthStatus } from './health';
+import { logger } from './logger';
 
 function createRedisClient() {
   const client = createClient({ url: getEnv().REDIS_URL });
@@ -7,7 +9,7 @@ function createRedisClient() {
   // node-redis emits 'error' on every reconnect attempt; unhandled it would
   // take the process down.
   client.on('error', (error) => {
-    console.error('[redis] client error', error);
+    logger.error('redis client error', { component: 'redis', error });
   });
 
   return client;
@@ -45,10 +47,36 @@ export async function getConnectedRedis(): Promise<RedisClient> {
   return client;
 }
 
+/** Sets `key`, optionally expiring after `ttlSeconds`. */
+export async function set(key: string, value: string, ttlSeconds?: number): Promise<void> {
+  const client = await getConnectedRedis();
+  if (ttlSeconds !== undefined && ttlSeconds > 0) {
+    await client.set(key, value, { EX: ttlSeconds });
+    return;
+  }
+  await client.set(key, value);
+}
+
+/** Returns the value at `key`, or null when absent. */
+export async function get(key: string): Promise<string | null> {
+  const client = await getConnectedRedis();
+  return client.get(key);
+}
+
+/** Deletes `key`, returning the number of keys removed (0 or 1). */
+export async function del(key: string): Promise<number> {
+  const client = await getConnectedRedis();
+  return client.del(key);
+}
+
 /** Liveness probe used by health checks and infrastructure smoke tests. */
 export async function pingRedis(): Promise<boolean> {
   const client = await getConnectedRedis();
   return (await client.ping()) === 'PONG';
+}
+
+export function checkRedisHealth(): Promise<HealthStatus> {
+  return probe('redis', pingRedis);
 }
 
 /** Closes the client. Intended for job/script teardown, not for request handlers. */

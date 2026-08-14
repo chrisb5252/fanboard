@@ -45,6 +45,20 @@
     "no-var": "error",
     "prefer-const": "error"
   },
+  "overrides": [
+    {
+      "files": ["packages/backend/src/lib/logger.ts"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["packages/*/__tests__/**/*.ts", "packages/*/**/*.test.ts"],
+      "rules": {
+        "@typescript-eslint/no-explicit-any": "off"
+      }
+    }
+  ],
   "ignorePatterns": [
     "node_modules/",
     "dist/",

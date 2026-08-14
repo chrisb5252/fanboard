@@ -16,6 +16,7 @@
     "type-check": "npm run type-check --workspaces --if-present",
     "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "test": "npm run test --workspaces --if-present",
     "dev:backend": "npm run dev --workspace @fanboard/backend",
     "dev:admin": "npm run dev --workspace @fanboard/admin-web",
     "dev:mobile": "npm run dev --workspace @fanboard/mobile-web",

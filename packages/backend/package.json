@@ -9,6 +9,8 @@
     "start": "next start -p 3000",
     "type-check": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
+    "test": "vitest run --config vitest.config.mts",
+    "test:watch": "vitest --config vitest.config.mts",
     "db:apply": "psql \"$DATABASE_URL\" -f schema.sql"
   },
   "dependencies": {
@@ -25,6 +27,7 @@
     "@types/pg": "^8.15.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }
