@@ -54,6 +54,42 @@ export async function setVenueConfig(
   };
 }
 
+export interface VenueSummary {
+  venueId: UUID;
+  name: string;
+  enabledLeagues: League[];
+}
+
+/**
+ * Who does this API key belong to?
+ *
+ * The key authenticates a venue, so an admin holding one has no other way to
+ * learn which venue it is. Without this, a console would have to ask for the
+ * venue UUID *and* the key at sign-in and hope they match — and the venue name
+ * (which the dashboard header shows) was not reachable at all.
+ */
+export async function getVenueSummary(
+  venueId: UUID,
+  deps?: Partial<AdminServiceDeps>,
+): Promise<VenueSummary> {
+  const { db } = resolveDeps(deps);
+  const result = await db.query<{ id: string; name: string; enabled_leagues: unknown }>(
+    'SELECT id, name, enabled_leagues FROM venues WHERE id = $1::uuid',
+    [venueId],
+  );
+
+  const row = result.rows[0];
+  if (row === undefined) {
+    throw ApiError.notFound('Venue not found');
+  }
+
+  return {
+    venueId: trustedUuid(row.id),
+    name: row.name,
+    enabledLeagues: (row.enabled_leagues as League[] | null) ?? [],
+  };
+}
+
 export async function getVenueConfig(
   venueId: UUID,
   deps?: Partial<AdminServiceDeps>,

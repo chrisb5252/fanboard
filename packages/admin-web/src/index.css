@@ -1,11 +1,24 @@
+/*
+ * Admin console. Desktop-first with a tablet breakpoint, dark to match the
+ * rest of the product. Vanilla CSS rather than Tailwind: the other three
+ * packages use plain CSS, and adding a second styling toolchain to one package
+ * makes the monorepo less consistent, not more.
+ */
+
 :root {
   color-scheme: dark;
   --bg: #0b0f19;
-  --panel: #121826;
-  --fg: #e8ecf6;
-  --muted: #8b94ad;
-  --line: #1e2739;
+  --surface: #131a29;
+  --surface-2: #1b2436;
+  --fg: #eef2f9;
+  --muted: #93a0b8;
+  --line: #24304a;
   --accent: #60a5fa;
+  --accent-ink: #04101f;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --sidebar: 220px;
 }
 
 * {
@@ -22,49 +35,516 @@ body,
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.5;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.45;
 }
 
-.shell {
-  max-width: 44rem;
-  margin: 0 auto;
-  padding: 4rem 1.5rem;
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
 }
 
-.head {
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* --- login ---------------------------------------------------------------- */
+
+.login {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.login__card {
+  width: 100%;
+  max-width: 24rem;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding-bottom: 1.5rem;
+  gap: 0.5rem;
+  padding: 1.75rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.login__brand {
+  align-self: flex-start;
+  padding: 0.25rem 0.7rem;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 800;
+  font-size: 0.875rem;
+}
+
+.login__title {
+  margin: 0.75rem 0 0;
+  font-size: 1.5rem;
+}
+
+.login__lede {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+}
+
+.login__note {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+/* --- shell ---------------------------------------------------------------- */
+
+.shell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell__header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.85rem 1.25rem;
   border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.shell__brand {
+  font-weight: 700;
+}
+
+.shell__venue {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell__logout {
+  margin-left: auto;
+}
+
+.shell__body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: var(--sidebar) 1fr;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem;
+  gap: 0.25rem;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.sidebar__item {
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar__item--active {
+  background: var(--surface-2);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.content {
+  padding: 1.5rem;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .shell__body {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .sidebar__item {
+    white-space: nowrap;
+  }
+}
+
+/* --- pages ---------------------------------------------------------------- */
+
+.page {
+  max-width: 60rem;
+}
+
+.page__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+}
+
+.page__lede {
+  margin: 0 0 1.25rem;
+  color: var(--muted);
+}
+
+.card {
+  margin: 0 0 1.25rem;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.card--key {
+  border-color: var(--warn);
+}
+
+.card__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.125rem;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.input {
+  min-height: 40px;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  width: 100%;
+}
+
+.button {
+  min-height: 40px;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.button--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.button--primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.button--ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--fg);
+}
+
+.button--small {
+  min-height: 32px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8125rem;
+  background: transparent;
+  border-color: var(--line);
+}
+
+.linklike {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row--between {
+  justify-content: space-between;
+}
+
+.checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.5rem;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 40px;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+}
+
+/* --- feedback ------------------------------------------------------------- */
+
+.state {
+  padding: 1.5rem 0;
+  color: var(--muted);
+}
+
+.error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.875rem;
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.hint--warn {
+  color: var(--warn);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.keybox {
+  display: block;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9375rem;
+  word-break: break-all;
+  user-select: all;
 }
 
 .badge {
-  align-self: flex-start;
-  padding: 0.15rem 0.55rem;
-  border: 1px solid var(--line);
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
   border-radius: 999px;
-  background: var(--panel);
-  color: var(--accent);
+  background: var(--surface-2);
+  color: var(--muted);
   font-size: 0.75rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
 }
 
-h1 {
-  margin: 0;
+.badge--online {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--ok);
+}
+
+.badge--offline {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--danger);
+}
+
+.badge--live {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--danger);
+}
+
+.badge--final {
+  color: var(--muted);
+}
+
+/* --- tables --------------------------------------------------------------- */
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.table th {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+}
+
+/* --- stats ---------------------------------------------------------------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.stat__label {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.stat__value {
   font-size: 1.75rem;
-  letter-spacing: -0.02em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-.lede {
-  margin: 1.5rem 0 0;
+.stat__sub {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+/* --- modal + preview ------------------------------------------------------ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(3, 6, 12, 0.7);
+}
+
+.modal {
+  width: 100%;
+  max-width: 44rem;
+  max-height: 85vh;
+  overflow: auto;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.preview__heading {
+  margin: 0 0 0.4rem;
+  font-size: 0.9375rem;
   color: var(--muted);
 }
 
-.port {
-  margin: 2rem 0 0;
+.preview__list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9375rem;
+}
+
+/* --- toasts --------------------------------------------------------------- */
+
+.toasts {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  max-width: 24rem;
+}
+
+.toast--ok {
+  border-color: var(--ok);
+}
+
+.toast--error {
+  border-color: var(--danger);
+}
+
+.toast__close {
+  margin-left: auto;
+  border: 0;
+  background: none;
   color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.875rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+  line-height: 1;
 }
