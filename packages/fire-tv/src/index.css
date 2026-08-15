@@ -1,18 +1,27 @@
 /*
- * 10-foot UI. Read from across a bar, driven by a D-pad remote.
- *  - Everything sits inside a 5% overscan-safe margin.
- *  - Base type is 24px; nothing meaningful is smaller than 20px.
- *  - Focus is always visible: the remote gives no cursor to fall back on.
+ * 10-foot UI for Fire TV.
+ *
+ * Constraints this is built to, all of them from the hardware rather than taste:
+ *  - Read from across a bar. Base type is 28px; nothing meaningful under 22px.
+ *  - 5% overscan margin. Older panels crop the edges of the signal.
+ *  - No animation, no transition, no shadow, no filter. An ARM stick composites
+ *    those on the CPU and drops frames doing it, and nothing here moves anyway.
+ *  - Layout with flex and grid only, never with JS-measured positions.
+ *  - Pure black is avoided: on OLED panels it makes edges bloom.
  */
 
 :root {
   color-scheme: dark;
   --bg: #05070d;
-  --panel: #0f1523;
-  --fg: #f5f7fb;
-  --muted: #97a1b8;
-  --line: #1e2739;
-  --accent: #fbbf24;
+  --surface: #0f1523;
+  --surface-2: #17203200;
+  --fg: #f7f9fc;
+  --muted: #9aa6bf;
+  --line: #223049;
+  --live: #f87171;
+  --upcoming: #fbbf24;
+  --final: #6b7a95;
+  --accent: #4ade80;
   --overscan: 5%;
 }
 
@@ -30,54 +39,314 @@ body,
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 24px;
-  line-height: 1.4;
-  /* No pointer on a TV — a scrollbar would only ever be dead pixels. */
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 28px;
+  line-height: 1.3;
+  /* No pointer on a TV; a scrollbar would only ever be dead pixels. */
   overflow: hidden;
 }
 
-:focus-visible {
-  outline: 4px solid var(--accent);
-  outline-offset: 6px;
-  border-radius: 6px;
-}
+/* --- shell ---------------------------------------------------------------- */
 
-.stage {
+.tv {
   height: 100%;
   padding: var(--overscan);
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  gap: 1.5rem;
 }
 
-.badge {
-  align-self: flex-start;
-  padding: 0.2rem 0.7rem;
-  border: 2px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--accent);
-  font-size: 1rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.tv__main {
+  flex: 1;
+  min-height: 0;
 }
 
-h1 {
-  margin: 1.5rem 0 0;
-  font-size: 4rem;
-  letter-spacing: -0.03em;
+.tv__footer {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding-top: 1rem;
+  border-top: 2px solid var(--line);
 }
 
-.lede {
-  margin: 1rem 0 0;
-  max-width: 24ch;
+.tv__stale {
+  margin-left: auto;
   color: var(--muted);
+  font-size: 1rem;
+}
+
+/* --- zones ---------------------------------------------------------------- */
+
+.zone {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.zone--empty {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.zone__title {
+  margin: 0 0 1.25rem;
+  font-size: 2.25rem;
+  letter-spacing: -0.02em;
+}
+
+.zone__empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.75rem;
+  max-width: 24ch;
+}
+
+.zone__more {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 1.25rem;
+}
+
+/* --- scoreboard ----------------------------------------------------------- */
+
+.bands {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-height: 0;
+}
+
+.band__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.band__title--live {
+  color: var(--live);
+}
+
+.band__title--upcoming {
+  color: var(--upcoming);
+}
+
+.band__title--final {
+  color: var(--final);
+}
+
+.band__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(28ch, 1fr));
+  gap: 0.75rem;
+}
+
+.game {
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  /* The status colour is carried by a thick left border rather than a fill:
+     a solid tint at this size vibrates against the text. */
+  border-left: 10px solid var(--final);
+  border-radius: 6px;
+}
+
+.game--live {
+  border-left-color: var(--live);
+}
+
+.game--upcoming {
+  border-left-color: var(--upcoming);
+}
+
+.game--final {
+  border-left-color: var(--final);
+}
+
+.game__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  font-size: 1.0625rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.game__side {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.game__team {
+  flex: 1;
+  font-size: 1.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game__score {
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5ch;
+  text-align: right;
+}
+
+/* --- leaderboard ---------------------------------------------------------- */
+
+.board {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 1.5rem;
 }
 
-.port {
-  margin: 2.5rem 0 0;
+.board th {
+  text-align: left;
+  padding: 0.4rem 0.75rem;
+  font-size: 1.0625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border-bottom: 2px solid var(--line);
+}
+
+.board td {
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.board__rank {
+  width: 3ch;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.board__row--medal .board__rank {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.board__name {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board__num {
+  width: 5ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.board__points {
+  font-weight: 700;
+}
+
+/* --- QR ------------------------------------------------------------------- */
+
+.qr-strip {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.qr-strip__code {
+  /* White quiet zone around the code; scanners need the margin. */
+  width: 104px;
+  height: 104px;
+  padding: 6px;
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.qr-strip__text {
+  display: flex;
+  flex-direction: column;
+}
+
+.qr-strip__cta {
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.qr-strip__url {
+  font-size: 1.0625rem;
+  color: var(--muted);
+}
+
+.zone--qr {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.qr-full__code {
+  width: min(38vh, 340px);
+  height: min(38vh, 340px);
+  padding: 12px;
+  background: #ffffff;
+  border-radius: 8px;
+}
+
+.qr-full__url {
+  margin: 1rem 0 0;
+  font-size: 1.5rem;
+  color: var(--fg);
+}
+
+.qr-full__hint {
+  margin: 0.4rem 0 0;
   font-size: 1.25rem;
+  color: var(--muted);
+}
+
+/* --- setup / holding ------------------------------------------------------ */
+
+.tv--setup {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.setup {
+  max-width: 30ch;
+}
+
+.setup__brand {
+  display: inline-block;
+  padding: 0.4rem 1.1rem;
+  margin-bottom: 1.5rem;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #05140b;
+  font-size: 1.75rem;
+  font-weight: 800;
+}
+
+.setup__title {
+  margin: 0 0 0.75rem;
+  font-size: 2rem;
+}
+
+.setup__body {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1.375rem;
+}
+
+.setup__fingerprint {
+  margin: 1.5rem 0 0;
+  color: var(--muted);
+  font-size: 1.125rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }

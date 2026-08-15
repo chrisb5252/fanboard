@@ -13,7 +13,11 @@
       "jsx": true
     }
   },
-  "plugins": ["@typescript-eslint", "react", "react-hooks"],
+  "plugins": [
+    "@typescript-eslint",
+    "react",
+    "react-hooks"
+  ],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended",
@@ -37,23 +41,50 @@
     ],
     "@typescript-eslint/consistent-type-imports": [
       "error",
-      { "prefer": "type-imports", "fixStyle": "inline-type-imports" }
+      {
+        "prefer": "type-imports",
+        "fixStyle": "inline-type-imports"
+      }
     ],
     "@typescript-eslint/no-explicit-any": "error",
-    "eqeqeq": ["error", "smart"],
-    "no-console": ["error", { "allow": ["warn", "error"] }],
+    "eqeqeq": [
+      "error",
+      "smart"
+    ],
+    "no-console": [
+      "error",
+      {
+        "allow": [
+          "warn",
+          "error"
+        ]
+      }
+    ],
     "no-var": "error",
     "prefer-const": "error"
   },
   "overrides": [
     {
-      "files": ["packages/backend/src/lib/logger.ts"],
+      "files": [
+        "packages/fire-tv/src/lib/log.ts"
+      ],
       "rules": {
         "no-console": "off"
       }
     },
     {
-      "files": ["packages/*/__tests__/**/*.ts", "packages/*/**/*.test.ts"],
+      "files": [
+        "packages/backend/src/lib/logger.ts"
+      ],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/*/__tests__/**/*.ts",
+        "packages/*/**/*.test.ts"
+      ],
       "rules": {
         "@typescript-eslint/no-explicit-any": "off"
       }
