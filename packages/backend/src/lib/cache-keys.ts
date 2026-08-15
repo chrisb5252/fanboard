@@ -51,6 +51,31 @@ export function deviceVenueKey(deviceId: string): string {
   return `device:${deviceId}:venue`;
 }
 
+/** Rate-limit bucket for player-session creation, per IP per venue. */
+export function playerSessionRateKey(venueId: string, clientIp: string): string {
+  return `player_session:${venueId}:${clientIp}`;
+}
+
+/** Rate-limit bucket for player-session creation across a whole venue. */
+export function venueSessionRateKey(venueId: string): string {
+  return `player_session_venue:${venueId}`;
+}
+
+export const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
+/** Per IP per venue. One person rejoining a few times is fine; a bot is not. */
+export const PLAYER_SESSIONS_PER_IP = 5;
+
+/**
+ * Per venue, regardless of source address.
+ *
+ * The per-IP limit is only as good as the attacker's IP budget: a botnet, or a
+ * single host with an IPv6 allocation, defeats it entirely. This bounds the
+ * blast radius of that case to a number a real venue will never reach — a busy
+ * bar sees low hundreds of patrons in an evening, not thousands per hour.
+ */
+export const PLAYER_SESSIONS_PER_VENUE = 500;
+
 /** How long a discovered lock is remembered. Locks never un-lock. */
 export const GAME_LOCK_TTL_SECONDS = 3600;
 

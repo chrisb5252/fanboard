@@ -238,6 +238,48 @@ TLS — see `.env.example`.
 `assertVenueScope` rejects a valid session acting on a different venue than the
 one in the URL. Without it, changing the venue id in the path would be enough.
 
+### Rate limiting
+
+`POST /players` is the only unauthenticated write in the system. It carries two
+independent limits, both per hour:
+
+| Limit | Value | Why |
+| --- | --- | --- |
+| per IP, per venue | 5 | one person rejoining is fine, a bot is not |
+| per venue | 500 | holds when the IP is spoofed, distributed, or unknown |
+
+**The per-IP limit alone is not enough.** An attacker with a botnet — or simply
+an IPv6 allocation — has as many "distinct clients" as they need. The venue
+ceiling bounds that case to a number a real bar never reaches, and it is the
+only limit that applies at all when no client address can be trusted.
+
+The IP check runs first, so an abusive host is rejected *without* spending the
+venue's shared budget. Reversed, one attacker could exhaust the ceiling and lock
+out every real patron — the limiter causing the outage it exists to prevent.
+
+**`X-Forwarded-For` is a request header, so anyone can send one.** Reading its
+leftmost value — the usual "get the real client IP" recipe — lets a caller send
+a fresh forged address per request, and the limiter counts to one forever.
+`TRUSTED_PROXY_HOPS` (default 1) says how many proxies append to it, and
+`getClientIP` counts in from the **right** by that many. Everything to the left
+is ignored. Set it to match your topology; see `.env.example`.
+
+IPv6 buckets by /64 rather than by address: a single subscriber gets a /64, so
+per-address limiting would hand one attacker 2^64 free buckets inside their own
+allocation.
+
+The counter and its expiry are set by **one Lua script**, not INCR then EXPIRE.
+With two round trips, a process that dies in between leaves a key with no TTL —
+that client is then locked out permanently. The script also re-arms a missing
+TTL, so a key that somehow becomes immortal repairs itself.
+
+**Caveat: this fails open.** If Redis is unreachable the request is allowed and
+the event is logged at error level. That is availability over security, and the
+cost is real — an attacker who can knock Redis over also removes the rate limit.
+It is the right default here because the alternative is that a Redis blip stops
+every patron in every venue from joining. **Redis availability is now a security
+control and should be alerted on.**
+
 ### Admin surfaces
 
 **Venue config** stores enabled leagues as a JSONB array on `venues`, validated

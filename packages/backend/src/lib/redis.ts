@@ -81,6 +81,22 @@ export async function publish(channel: string, message: string): Promise<number>
   return client.publish(channel, message);
 }
 
+/**
+ * Runs a Lua script server-side.
+ *
+ * Redis executes a script atomically, which is what lets a read-modify-write
+ * (increment, then set an expiry only if there isn't one) happen without a
+ * window in between.
+ */
+export async function evalScript(
+  script: string,
+  keys: string[],
+  args: string[],
+): Promise<unknown> {
+  const client = await getConnectedRedis();
+  return client.eval(script, { keys, arguments: args });
+}
+
 /** Liveness probe used by health checks and infrastructure smoke tests. */
 export async function pingRedis(): Promise<boolean> {
   const client = await getConnectedRedis();
