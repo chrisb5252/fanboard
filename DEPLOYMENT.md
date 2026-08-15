@@ -220,24 +220,18 @@ NEXT_PUBLIC_API_URL=https://<backend>.up.railway.app
 
 NODE_ENV=production
 NEXT_MANUAL_SIG_HANDLE=1
-TRUSTED_PROXY_HOPS=1
 
-# Every frontend origin that calls the API. No default in production — unset
-# means every cross-origin browser call is denied.
-CORS_ALLOWED_ORIGINS=https://<mobile>.up.railway.app,https://<admin>.up.railway.app,https://<tv>.up.railway.app
+# Railway edge + Caddy. See the section below — getting this wrong silently
+# breaks per-IP rate limiting in one direction or the other.
+TRUSTED_PROXY_HOPS=2
+
+# Only needed for clients NOT served through the Caddy proxy, which are
+# same-origin. No default in production: unset denies every cross-origin
+# browser call, scheme + host, no trailing slash.
+# CORS_ALLOWED_ORIGINS=https://someother.example
 ```
 
-Do **not** set `PORT`. Railway provides it and `next start` reads it.
-
-`CORS_ALLOWED_ORIGINS` is the one that bites: each Vite app is its own Railway
-service on its own domain, so every call from them is cross-origin. Leave it
-unset and the API refuses all of them — deliberately, since the alternative is
-trusting an origin nobody chose. The values must be scheme + host with no
-trailing slash and no path.
-
-`TRUSTED_PROXY_HOPS=1` matches Railway's single edge proxy. Verify it rather
-than trusting it: trip the session rate limit and check `clientIp` on the
-rejection log line is the real client address, not Railway's.
+Do **not** set `PORT`. Railway provides it and the server reads it.
 
 ### Schema
 
@@ -251,37 +245,64 @@ railway run --service <backend> psql "$DATABASE_URL" -f packages/backend/schema.
 
 It is idempotent, so re-running is safe and is how column additions land.
 
-### The WebSocket is not reachable on Railway
+### Realtime shares the API port
 
-**Realtime does not work on Railway as currently deployed.** This is a real
-limitation, not a configuration mistake to hunt for:
+`npm start` runs `server.mjs`, a custom Next server that owns one HTTP listener
+and routes `/ws` upgrades to the realtime layer. There is **no second port** to
+publish or proxy, which is what makes realtime work on a platform that exposes
+one port per service.
 
-- The realtime listener binds its own port (3100). Next's App Router does not
-  hand out its HTTP server, so an upgrade handler cannot share the API's port
-  without a custom server.
-- That design assumes a reverse proxy routing `/ws` → 3100. Railway publishes
-  exactly **one** port per service and provides no such proxy.
-- In production the Vite apps are static builds. `vite.config.ts`'s `/ws` proxy
-  only applies to `vite dev` and `vite preview`, so it does nothing here.
+Nothing to configure. `WS_PORT` and `WS_STANDALONE_PORT` apply only to the
+standalone mode, which `npm run dev` uses locally and which a deployment fronted
+by its own proxy can opt into.
 
-The visible symptom is mild, which is why it is easy to miss: clients fail to
-connect, retry on their backoff schedule, and **keep polling**, so screens and
-phones still update — just on the poll interval rather than instantly. Polling
-was deliberately kept alongside the socket for exactly this reason.
+### Frontends
 
-Options, in increasing order of effort:
+Do not run `vite` or `vite preview` in production. Both are development servers
+— unminified, source-mapped, not written to face the public — and the only
+reason a Node process was ever there is the `/api` and `/ws` proxy.
 
-1. **Accept it.** Displays refresh every 10s and phones on their own timer. For
-   a pilot this is genuinely fine.
-2. **Custom Next server.** One HTTP server that delegates to Next's handler and
-   handles `/ws` upgrades itself, so both share `$PORT`. The real work is that
-   the WebSocket module is TypeScript and a custom server needs it compiled —
-   put the `WebSocketServer` in `noServer` mode and have the server delegate
-   upgrades to it.
-3. **Separate WebSocket service.** Works, but the patron socket authenticates
-   with an httpOnly **cookie** that rides the handshake *because it is
-   same-origin*. A different domain drops it, so this needs a cookie scoped to a
-   shared parent domain or a token exchange — more invasive than option 2.
+Build each frontend into a Caddy image instead. Caddy serves the static bundle
+*and* proxies `/api` and `/ws` to the backend, so the browser still sees one
+origin:
+
+```bash
+docker build -f deploy/frontend.Dockerfile --build-arg PACKAGE=mobile-web -t fanboard-mobile .
+docker build -f deploy/frontend.Dockerfile --build-arg PACKAGE=fire-tv    -t fanboard-tv .
+docker build -f deploy/frontend.Dockerfile --build-arg PACKAGE=admin-web  -t fanboard-admin .
+```
+
+Each frontend service needs one variable:
+
+```bash
+BACKEND_ORIGIN=http://<backend-service>.railway.internal:3000
+```
+
+Railway sets `PORT` itself; Caddy reads it.
+
+Same-origin is the reason for the proxy rather than pointing the clients at the
+backend domain: the patron's session cookie is httpOnly and `SameSite=Lax`, so
+it rides the WebSocket handshake only when the socket shares the page's origin,
+and same-origin `/api` avoids a CORS preflight on every poll.
+
+With Caddy in place the frontends no longer need `CORS_ALLOWED_ORIGINS` entries
+for themselves — every call is same-origin. Keep the variable set for any
+client you deploy elsewhere.
+
+### TRUSTED_PROXY_HOPS is 2 behind Caddy
+
+There are now two proxies in front of the backend: Railway's edge, then Caddy.
+`X-Forwarded-For` gains an entry at each, so the rate limiter must count **2**
+hops from the right:
+
+```bash
+TRUSTED_PROXY_HOPS=2
+```
+
+Leave it at 1 and every request appears to come from Caddy's address, so one
+venue shares a single rate-limit bucket and the whole room is locked out after
+five joins. Verify rather than trust: trip the session limit and confirm
+`clientIp` on the rejection log line is the real client address.
 
 ## 9. Load test
 

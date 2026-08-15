@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { parseCookieHeader, SESSION_COOKIE_NAME } from './auth';
 import type { SqlExecutor } from './db';
@@ -11,17 +12,26 @@ import { hashToken } from './tokens';
 /**
  * Realtime fan-out.
  *
- * ## Why a separate port
+ * ## Two ways to run
  *
- * The brief asks for a `/ws` endpoint on the Next.js server, in the same
- * process. Next's App Router does not expose its HTTP server — there is no hook
- * to attach a `ws` upgrade handler to the listener `next start` owns. The two
- * ways out are a custom server (which replaces `next start`, and cannot import
- * this TypeScript module without a second build step) or a dedicated listener.
+ * Next's App Router does not expose its HTTP server, so there is no hook to
+ * attach an upgrade handler to the listener `next start` owns. Hence two modes:
  *
- * This is the dedicated listener, started from `instrumentation.ts`, so it runs
- * in the *same process* as the API as required — just on its own port. In front
- * of a reverse proxy, map `/ws` to it and clients never learn the difference.
+ *  - `attachWebSocketServer()` — no port of its own. `server.mjs` owns one HTTP
+ *    server on $PORT and forwards upgrades here. This is production.
+ *  - `startWebSocketServer()` — binds its own port. Used by tests, and by
+ *    deployments fronted by a proxy that can route `/ws` to a second port.
+ *
+ * The separate-port mode came first and turned out to be unshippable on the
+ * platforms this actually runs on: Railway, Cloud Run and Heroku each publish
+ * exactly one port per service, so the second listener was simply unreachable
+ * and realtime silently degraded to polling. The custom server exists to fix
+ * that, and it dodges the TypeScript problem — a plain-JS server cannot import
+ * this module, so `instrumentation.ts` (which Next compiles) registers the
+ * handler on globalThis and the server reads it from there.
+ *
+ * Sharing the API's origin is also what keeps the patron's httpOnly session
+ * cookie working: it rides the handshake only because it is same-origin.
  *
  * ## Why Redis, not just an in-memory map
  *
@@ -56,13 +66,30 @@ export interface WebSocketDeps {
 
 interface ServerState {
   wss: WebSocketServer;
-  http: Server;
+  /** null when attached to someone else's HTTP server rather than owning one. */
+  http: Server | null;
   rooms: Map<string, Set<TrackedClient>>;
   heartbeat: ReturnType<typeof setInterval>;
   subscriber: ReturnType<typeof getRedis> | null;
 }
 
-const globalForWs = globalThis as unknown as { fanboardWs?: ServerState };
+/**
+ * `fanboardWsUpgrade` is read by `server.mjs`, which is plain JavaScript and
+ * cannot import this module. Publishing the handler on globalThis is what lets
+ * a custom server share one port with the API without a second build step:
+ * Next compiles `instrumentation.ts`, that registers the handler here, and the
+ * custom server just forwards `upgrade` events to whatever it finds.
+ */
+const globalForWs = globalThis as unknown as {
+  fanboardWs?: ServerState;
+  fanboardWsUpgrade?: UpgradeHandler;
+};
+
+export type UpgradeHandler = (
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+) => void;
 
 function resolvePort(): number {
   const raw = process.env['WS_PORT'];
@@ -203,12 +230,52 @@ export function connectionCount(): number {
 // Server
 // ---------------------------------------------------------------------------
 
+/**
+ * Brings up the realtime layer without binding a port, and returns the upgrade
+ * handler for an HTTP server someone else owns.
+ *
+ * This is the path used in production. `server.mjs` creates one HTTP server on
+ * $PORT, hands ordinary requests to Next and upgrades to this — so `/ws` and
+ * `/api` share an origin and a port. That matters beyond tidiness: platforms
+ * like Railway, Cloud Run and Heroku publish exactly one port per service, so
+ * a second listener is simply unreachable there. It also keeps the patron's
+ * httpOnly cookie working, since it only rides the handshake same-origin.
+ */
+export function attachWebSocketServer(deps?: Partial<WebSocketDeps>): UpgradeHandler | null {
+  if (globalForWs.fanboardWs !== undefined) {
+    return globalForWs.fanboardWsUpgrade ?? null;
+  }
+
+  const handler = createServerState({ ...deps, http: null });
+  globalForWs.fanboardWsUpgrade = handler;
+  return handler;
+}
+
+/**
+ * Forwards an upgrade to the attached server. Safe to call before the realtime
+ * layer is up: the socket is closed rather than left hanging.
+ */
+export function handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+  const handler = globalForWs.fanboardWsUpgrade;
+  if (handler === undefined) {
+    socket.destroy();
+    return;
+  }
+  handler(request, socket, head);
+}
+
+/**
+ * Brings up the realtime layer on its own port.
+ *
+ * Retained for tests, which want an isolated listener, and for deployments that
+ * genuinely front the app with a reverse proxy that can route `/ws` to a second
+ * port. Prefer `attachWebSocketServer` anywhere a platform publishes one port.
+ */
 export function startWebSocketServer(deps?: Partial<WebSocketDeps>): boolean {
   if (globalForWs.fanboardWs !== undefined) {
     return false;
   }
 
-  const db = deps?.db ?? defaultSql;
   const log = deps?.logger ?? rootLogger.child({ component: 'websocket' });
   const port = deps?.port ?? resolvePort();
 
@@ -217,6 +284,27 @@ export function startWebSocketServer(deps?: Partial<WebSocketDeps>): boolean {
     response.writeHead(426, { 'Content-Type': 'text/plain' });
     response.end('Upgrade required');
   });
+
+  const handler = createServerState({ ...deps, http });
+  http.on('upgrade', handler);
+
+  http.listen(port, () => {
+    log.info('websocket server listening', { port, path: '/ws' });
+  });
+
+  return true;
+}
+
+/**
+ * Shared construction for both modes. Returns the upgrade handler; the caller
+ * decides whether to bind it to its own listener or hand it upward.
+ */
+function createServerState(
+  deps: Partial<WebSocketDeps> & { http: Server | null },
+): UpgradeHandler {
+  const db = deps.db ?? defaultSql;
+  const log = deps.logger ?? rootLogger.child({ component: 'websocket' });
+  const http = deps.http;
 
   const wss = new WebSocketServer({ noServer: true });
 
@@ -240,7 +328,7 @@ export function startWebSocketServer(deps?: Partial<WebSocketDeps>): boolean {
     subscriber: null,
   };
 
-  http.on('upgrade', (request, socket, head) => {
+  const upgrade: UpgradeHandler = (request, socket, head) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     if (url.pathname !== '/ws') {
       socket.destroy();
@@ -298,13 +386,12 @@ export function startWebSocketServer(deps?: Partial<WebSocketDeps>): boolean {
         );
       });
     })();
-  });
-
-  http.listen(port, () => {
-    log.info('websocket server listening', { port, path: '/ws' });
-  });
+  };
 
   globalForWs.fanboardWs = state;
+  if (http === null) {
+    log.info('websocket attached to the API server', { path: '/ws' });
+  }
 
   // Subscribing needs its own connection: a Redis client in subscribe mode
   // cannot run ordinary commands, so reusing the shared client would break
@@ -335,7 +422,7 @@ export function startWebSocketServer(deps?: Partial<WebSocketDeps>): boolean {
     }
   })();
 
-  return true;
+  return upgrade;
 }
 
 export async function stopWebSocketServer(): Promise<void> {
@@ -344,6 +431,7 @@ export async function stopWebSocketServer(): Promise<void> {
     return;
   }
   globalForWs.fanboardWs = undefined;
+  globalForWs.fanboardWsUpgrade = undefined;
 
   clearInterval(state.heartbeat);
 
@@ -364,6 +452,12 @@ export async function stopWebSocketServer(): Promise<void> {
 
   await new Promise<void>((resolve) => {
     state.wss.close(() => {
+      // Nothing to close when attached to a server this module does not own —
+      // the custom server closes its own listener.
+      if (state.http === null) {
+        resolve();
+        return;
+      }
       state.http.close(() => {
         resolve();
       });

@@ -1,0 +1,70 @@
+# Serves a built Vite app and proxies the API and realtime endpoints to the
+# backend, so the browser sees ONE origin.
+#
+# Same-origin is not cosmetic here. The patron's session cookie is httpOnly and
+# SameSite=Lax: it rides the WebSocket handshake only when the socket shares the
+# page's origin, and it avoids a CORS preflight on every `/api` poll. Pointing
+# the clients straight at the backend domain instead would drop the cookie.
+#
+# Replaces running `vite` or `vite preview` in production. Both are development
+# servers — unminified, source-mapped, and not written to face the public. The
+# only reason a Node process was there at all is the proxy below.
+
+{
+	admin off
+	# Railway (and any platform edge) terminates TLS before this. Asking Caddy
+	# to obtain its own certificate would fail, and redirecting to https here
+	# would loop against an edge that is already serving https.
+	auto_https off
+
+	servers {
+		# Without this Caddy REWRITES X-Forwarded-Proto to the scheme it saw --
+		# plain http behind the edge -- and the backend, seeing http in
+		# production, answers 308 to https. The edge then forwards the retry as
+		# http again: a redirect loop that only appears once deployed.
+		#
+		# Trusting the platform edge makes Caddy preserve the inbound
+		# X-Forwarded-* and append to them instead.
+		trusted_proxies static private_ranges
+	}
+}
+
+:{$PORT:8080} {
+	encode gzip zstd
+
+	# The realtime socket. Caddy's reverse_proxy upgrades WebSockets natively;
+	# no extra directive is needed.
+	handle /ws {
+		reverse_proxy {$BACKEND_ORIGIN}
+	}
+
+	handle /api/* {
+		reverse_proxy {$BACKEND_ORIGIN}
+	}
+
+	# Fingerprinted build output, served with NO fallback. Under the catch-all
+	# below, a renamed or stale chunk would answer 200 with index.html, and the
+	# browser would report a MIME-type error about HTML where JavaScript was
+	# expected -- which reads as a bundler fault and sends you looking in the
+	# wrong place. A missing asset should 404 and say so.
+	handle /assets/* {
+		root * /srv
+		file_server
+	}
+
+	handle {
+		root * /srv
+		# SPA fallback, and it is load-bearing rather than boilerplate: the QR
+		# code on the TV points at /v/<venueId>, which the app reads from the
+		# pathname. There is no router and no such file on disk, so without this
+		# every scan would 404.
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}

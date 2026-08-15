@@ -72,6 +72,10 @@ RUN npm ci --omit=dev --workspace @fanboard/backend --include-workspace-root
 COPY --from=builder /app/packages/backend/.next ./packages/backend/.next
 COPY --from=builder /app/packages/backend/next.config.ts ./packages/backend/
 COPY packages/backend/schema.sql ./packages/backend/
+# The custom server. `npm start` runs this rather than `next start`, so that the
+# API and /ws share one listener — see server.mjs for why that is not optional
+# on a platform publishing one port per service.
+COPY packages/backend/server.mjs ./packages/backend/
 
 # Run unprivileged. The node image ships a `node` user for exactly this; a
 # container process that does not need root should not have it.
@@ -82,12 +86,9 @@ USER node
 # $PORT when the platform sets one (Railway, Cloud Run, Heroku all do) and
 # falls back to 3000 otherwise — verified both ways.
 #
-# 3100 is the WebSocket listener, in this same process on its own port because
-# Next's App Router does not expose its HTTP server for an upgrade handler.
-# NOTE: a platform that publishes only ONE port per service cannot reach it.
-# See DEPLOYMENT.md.
+# One port. /ws is served from the same listener via the custom server, so
+# there is no second port to publish or proxy.
 EXPOSE 3000
-EXPOSE 3100
 
 # The platform health check hits the same endpoint the runbooks use. It reads
 # PORT rather than assuming 3000, so setting PORT does not silently break the
