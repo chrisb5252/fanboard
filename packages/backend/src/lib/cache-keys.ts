@@ -76,6 +76,45 @@ export const PLAYER_SESSIONS_PER_IP = 5;
  */
 export const PLAYER_SESSIONS_PER_VENUE = 500;
 
+/** Rate-limit bucket for pick submission, keyed by the authenticated session. */
+export function pickRateKey(playerSessionId: string): string {
+  return `picks:${playerSessionId}`;
+}
+
+/** Rate-limit bucket for display reads, keyed by the authenticated device. */
+export function displayRateKey(deviceId: string): string {
+  return `display:${deviceId}`;
+}
+
+/** Both of the limits below are per minute, unlike the hourly session window. */
+export const SHORT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+
+/**
+ * Picks per minute for one session.
+ *
+ * The specified figure was 10/min. That is below legitimate use: a patron
+ * tapping through a 14-game slate, or changing their mind late, submits faster
+ * than one pick every six seconds without trying, and would be rejected mid-way
+ * through picking. Rate limits that fire on ordinary behaviour get raised in a
+ * panic during the first busy night, usually by disabling them.
+ *
+ * What this needs to stop is a client stuck in a loop or a script hammering the
+ * endpoint, not enthusiasm. One per second sustained is far beyond human
+ * tapping and still bounds the damage, so that is the number. The write itself
+ * is already idempotent per (game, session) and cannot inflate a score.
+ */
+export const PICKS_PER_SESSION_PER_MINUTE = 60;
+
+/**
+ * Display reads per minute for one device.
+ *
+ * Displays poll on a 10 second cadence, so a healthy Fire TV spends 6. The
+ * headroom absorbs a reconnect storm or a stick that reboots into a fast retry
+ * loop; anything sustained above it is a malfunctioning device, and throttling
+ * it protects the other displays at the venue.
+ */
+export const DISPLAY_READS_PER_DEVICE_PER_MINUTE = 100;
+
 /** How long a discovered lock is remembered. Locks never un-lock. */
 export const GAME_LOCK_TTL_SECONDS = 3600;
 

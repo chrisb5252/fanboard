@@ -1,7 +1,14 @@
 import { NextResponse } from 'next/server';
 import { assertVenueScope, sessionMiddleware } from '../../../../../lib/auth';
+import {
+  PICKS_PER_SESSION_PER_MINUTE,
+  SHORT_RATE_LIMIT_WINDOW_MS,
+  pickRateKey,
+} from '../../../../../lib/cache-keys';
 import { toErrorBody } from '../../../../../lib/errors';
 import { logger as rootLogger } from '../../../../../lib/logger';
+import { tooManyRequests } from '../../../../../lib/rate-limit-response';
+import { consumeRateLimit } from '../../../../../lib/rate-limiter';
 import {
   parseJsonBody,
   validateGameId,
@@ -71,6 +78,26 @@ export async function POST(
     // whether a game id exists or is locked.
     const session = await requireSession(request);
     assertVenueScope(session, venueId);
+
+    // Keyed by session rather than by IP: every patron at a venue shares one
+    // NAT address, so an IP bucket here would throttle the whole room the
+    // moment the bar got busy. Applied after authentication, so an
+    // unauthenticated caller cannot consume anyone's budget, and before the
+    // body is parsed, so a looping client costs one Redis round trip.
+    const limit = await consumeRateLimit(
+      pickRateKey(session.playerSessionId),
+      PICKS_PER_SESSION_PER_MINUTE,
+      SHORT_RATE_LIMIT_WINDOW_MS,
+    );
+    if (!limit.allowed) {
+      log.warn('pick rejected by per-session rate limit', {
+        venueId,
+        playerSessionId: session.playerSessionId,
+        count: limit.count,
+        limit: limit.limit,
+      });
+      return tooManyRequests(limit, 'session', 'Too many picks too quickly. Slow down.');
+    }
 
     const body = await parseJsonBody(request);
     const gameId = validateGameId(body['gameId']);

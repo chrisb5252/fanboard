@@ -28,7 +28,19 @@ export async function probe(
       dependency,
       healthy: false,
       latencyMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : String(error),
+      // Falls back to the constructor name because some client libraries throw
+      // errors with an empty message — a connection timeout being the common
+      // one. "unhealthy, reason: (blank)" is what an on-call engineer reads at
+      // 3am, and it tells them nothing.
+      error: describeError(error),
     };
   }
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message !== '' ? error.message : error.constructor.name;
+  }
+  const described = String(error);
+  return described !== '' ? described : 'unknown error';
 }

@@ -59,9 +59,34 @@ ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_enabled_leagues_is_array;
 ALTER TABLE venues ADD CONSTRAINT venues_enabled_leagues_is_array
   CHECK (jsonb_typeof(enabled_leagues) = 'array');
 
+-- Key rotation. The previous key stays valid for a bounded grace window so a
+-- venue can roll its credential without an outage: rotating a single-column
+-- key breaks every running client the instant it is written, which is why
+-- rotation that costs downtime never actually gets used.
+--
+-- Both columns are cleared on revocation, which is the "disable the old key
+-- now" path for a suspected compromise.
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS previous_api_key TEXT;
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS previous_api_key_expires_at TIMESTAMPTZ;
+
+-- A stale previous key must never be accepted, so the two columns are only
+-- ever meaningful together.
+ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_previous_key_paired;
+ALTER TABLE venues ADD CONSTRAINT venues_previous_key_paired
+  CHECK ((previous_api_key IS NULL) = (previous_api_key_expires_at IS NULL));
+
+-- Partial: only rows mid-rotation are indexed, which is almost none of them.
+CREATE INDEX IF NOT EXISTS venues_previous_api_key_idx
+  ON venues (previous_api_key)
+  WHERE previous_api_key IS NOT NULL;
+
 COMMENT ON TABLE venues IS 'Tenant root; every other table cascades from here.';
 COMMENT ON COLUMN venues.api_key IS
   'SHA-256 hash of the venue API key. Provision with: encode(sha256(''<raw key>''::bytea), ''hex'')';
+COMMENT ON COLUMN venues.previous_api_key IS
+  'SHA-256 hash of the superseded key, accepted until previous_api_key_expires_at.';
+COMMENT ON COLUMN venues.previous_api_key_expires_at IS
+  'When the superseded key stops being accepted. NULL means no key is mid-rotation.';
 COMMENT ON COLUMN venues.enabled_leagues IS
   'Whitelisted league codes this venue ingests, e.g. ["NFL","NBA"]. Empty array means no filter.';
 

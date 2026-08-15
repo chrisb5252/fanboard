@@ -1,0 +1,40 @@
+# Docker reads the .dockerignore next to the *build context*, not next to the
+# Dockerfile. The backend image is built with the repo root as context (it needs
+# the workspace lockfile), so this file is the one that takes effect. A
+# .dockerignore inside packages/backend would be read by nothing.
+
+node_modules
+**/node_modules
+
+.git
+.gitignore
+
+# Secrets. .env.local is the one that actually exists locally; the rest are
+# listed so a future one cannot be added and quietly baked into a layer.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Build output — regenerated inside the image, and copying a host build in
+# would ship whatever architecture the developer's laptop happens to be.
+**/.next
+**/dist
+**/build
+
+# Tests and fixtures: not needed at runtime, and they enlarge the layer that
+# gets rebuilt most often.
+**/__tests__
+**/*.test.ts
+**/*.test.tsx
+**/vitest.config.mts
+
+# Local noise
+**/*.log
+**/.DS_Store
+**/coverage
+**/.vscode
+**/.idea
+docker-compose*.yml

@@ -25,6 +25,8 @@ import type { UUID } from './validators';
 export const AUDIT_ACTIONS = {
   venueConfigUpdated: 'venue.config.updated',
   devicePaired: 'device.paired',
+  apiKeyRotated: 'venue.api_key.rotated',
+  apiKeyPreviousRevoked: 'venue.api_key.previous_revoked',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

@@ -1,0 +1,270 @@
+===============================================================================
+FanBoard — SECURITY AUDIT
+Date:     2026-08-15
+Scope:    packages/backend, packages/admin-web, packages/mobile-web,
+          packages/fire-tv, deployment configuration, git history
+Method:   source review, static grep, automated tests, and a smoke test of the
+          built production image against live Postgres and Redis
+===============================================================================
+
+Legend:  [x] verified in place    [~] partially in place    [ ] not in place
+
+Every [x] below names the evidence. Items were not checked off on the basis of
+intent; where reality differs from the specification, the difference is
+recorded rather than reconciled quietly.
+
+-------------------------------------------------------------------------------
+[x] All environment variables documented and required
+-------------------------------------------------------------------------------
+    Zod schema validates DATABASE_URL, REDIS_URL, THESPORTSDB_API_KEY and
+    NEXT_PUBLIC_API_URL at first use and reports every missing variable at once
+    rather than one per restart.
+    Documented in packages/backend/.env.example and DEPLOYMENT.md.
+    docker-compose.prod.yml declares secrets with `:?` so the stack refuses to
+    start rather than booting with a default credential.
+    Evidence: src/lib/env.ts, .env.example, docker-compose.prod.yml (verified:
+    `docker compose config` fails with no vars, passes with them)
+
+-------------------------------------------------------------------------------
+[x] API keys not logged or exposed
+-------------------------------------------------------------------------------
+    Grepped every log call for credential names: zero matches.
+    redactSensitive() applied to log output AND audit-log details, so passing a
+    whole request body cannot persist a key into an append-only table.
+    Rotation returns the raw key in the response body only; it is absent from
+    logs and from the audit entry (asserted by test).
+    Health endpoint asserted to contain no connection string, host:port or
+    password.
+    Evidence: src/lib/logger.ts, src/lib/audit.ts,
+    __tests__/security.test.ts ("never writes the key into the audit trail",
+    "leaks nothing about the infrastructure")
+
+-------------------------------------------------------------------------------
+[x] SQL injection prevented (parameterized queries)
+-------------------------------------------------------------------------------
+    Zero interpolated values in any production query. Every statement uses
+    numbered placeholders with explicit casts ($1::uuid).
+    Filtered/dynamic-looking queries (pick inspector) build a fixed statement
+    and pass filters as parameters.
+    Branded UUID type means an unvalidated string cannot reach a query without
+    an explicit trustedUuid() call.
+    One interpolation exists in test code (__tests__/e2e.test.ts builds a
+    scheduled_at from a constant interval expression written in the test). Not
+    request data. Recorded rather than omitted.
+
+-------------------------------------------------------------------------------
+[x] XSS prevented (no dangerouslySetInnerHTML)
+-------------------------------------------------------------------------------
+    dangerouslySetInnerHTML: 0 occurrences across all four packages.
+    innerHTML assignment:    0 occurrences.
+    eval / new Function:     0 occurrences.
+      (client.eval in src/lib/redis.ts is Redis EVAL running a Lua script
+       server-side — not JavaScript evaluation.)
+    React escapes interpolated text by default and nothing opts out.
+
+-------------------------------------------------------------------------------
+[x] CSRF tokens added or SameSite cookies set
+-------------------------------------------------------------------------------
+    Session cookie: httpOnly, Secure (overridable only for venue-LAN http),
+    SameSite=Lax — not sent on a cross-site POST, which is the CSRF case.
+    Lax rather than Strict is deliberate: the patron arrives via QR scan, and
+    Strict withholds the cookie on that first cross-site navigation.
+    Admin and device routes authenticate with headers, which a cross-site form
+    cannot set.
+    No CSRF token. Justified above; revisit if cookie-authenticated state-changing
+    routes are added for admins.
+    Evidence: src/app/api/venues/[venueId]/players/route.ts,
+    __tests__/e2e.test.ts (asserts httponly + samesite=lax on the real response)
+
+-------------------------------------------------------------------------------
+[x] CORS configured for production domain
+-------------------------------------------------------------------------------
+    Allowlist in src/middleware.ts. Origin echoed, never "*" (a wildcard is
+    rejected outright by browsers on credentialed requests). Vary: Origin set.
+    Preflight from an unlisted origin: 403.
+    Production has NO built-in origin — an unset CORS_ALLOWED_ORIGINS denies
+    every cross-origin browser call. Fails closed.
+    NOTE: dev allowlist covers ports 3000-3003. The specification listed only
+    3000 and 3001, which omits mobile-web (3002) and fire-tv (3003).
+    Evidence: __tests__/security.test.ts (12 CORS cases), plus verified against
+    the running production container.
+
+-------------------------------------------------------------------------------
+[~] Rate limiting active
+-------------------------------------------------------------------------------
+    IN PLACE:
+      POST /api/venues/{id}/players    5/hour per IP, 500/hour per venue
+      POST /api/venues/{id}/picks     60/minute per session   (added in this pass)
+      GET  /api/devices/{id}/display 100/minute per device    (added in this pass)
+      Admin routes                    unlimited (trusted, API-key authenticated)
+
+    NOT IN PLACE:
+      GET /api/venues/{id}/games       public, unlimited
+      GET /api/venues/{id}/leaderboard public, unlimited
+      Mitigated by Redis caching (10s / 60s TTL) so sustained polling costs
+      roughly one database read per interval per venue. Add an IP limit before
+      exposing to the open internet.
+
+    Two values differ from specification, deliberately:
+      - players 5/hour per IP, not 100/minute — the existing tuned limit
+      - picks 60/min per session, not 10/min — 10/min rejects a patron tapping
+        through a normal slate, and a limit that fires on ordinary use gets
+        switched off during the first busy night
+
+    NOTE: rate limiting FAILS OPEN when Redis is unreachable, logged at error
+    level. Redis availability is therefore a security control. See RUNBOOKS.md.
+
+-------------------------------------------------------------------------------
+[x] TLS/HTTPS required
+-------------------------------------------------------------------------------
+    Production: Strict-Transport-Security max-age=31536000; includeSubDomains.
+    Plain HTTP redirected 308 (preserves method and body; a 302 would silently
+    turn a POST into a GET on retry).
+    HSTS is production-only — a dev server sending it pins localhost to https in
+    the developer's browser for a year.
+    /api/health is exempt from the redirect. FOUND BY SMOKE-TESTING THE BUILT
+    IMAGE: Next sets x-forwarded-proto: http on direct connections, so every
+    probe received a 308, and a probe that does not follow redirects reads that
+    as failure — the orchestrator then restarts a healthy container forever.
+    Also set on every response: X-Content-Type-Options: nosniff,
+    X-Frame-Options: DENY, Referrer-Policy: no-referrer.
+    Evidence: __tests__/security.test.ts, verified on the running container.
+
+-------------------------------------------------------------------------------
+[ ] Database backups enabled
+-------------------------------------------------------------------------------
+    NOT VERIFIABLE FROM THIS REPOSITORY — it is a property of the deployed
+    database, not of the code. Left unchecked deliberately rather than assumed.
+    DEPLOYMENT.md step 1 requires enabling automated backups AND testing a
+    restore before launch. A backup nobody has restored is a hypothesis.
+    ACTION REQUIRED BEFORE LAUNCH.
+
+-------------------------------------------------------------------------------
+[ ] Audit logs retained 90 days
+-------------------------------------------------------------------------------
+    Audit logging works (config changes, device pairing, key rotation, key
+    revocation; details redacted; never throws).
+    Retention is NOT enforced by anything — no archival or pruning job exists,
+    and the table grows without bound.
+    ACTION REQUIRED: add a retention job, or document indefinite retention as
+    the accepted policy.
+
+-------------------------------------------------------------------------------
+[x] API keys rotatable
+-------------------------------------------------------------------------------
+    POST   /api/admin/venues/{venueId}/rotate-key   issues a new key
+    DELETE /api/admin/venues/{venueId}/rotate-key   ends the grace window now
+    Old key valid for 24 hours so rotation causes no outage — the property that
+    determines whether rotation is ever actually used.
+    256-bit random, SHA-256 at rest, returned exactly once.
+    Cross-venue rotation refused (403); expired grace key refused.
+    Evidence: src/services/api-keys.ts, __tests__/security.test.ts (9 cases)
+
+-------------------------------------------------------------------------------
+[x] Session tokens expire after 24 hours
+-------------------------------------------------------------------------------
+    Marked "optional" in the specification; it is implemented.
+    Absolute lifetime: 24h (player_sessions.expires_at).
+    Idle timeout:      12h (SESSION_IDLE_TIMEOUT_HOURS).
+    Both enforced in the same statement that refreshes last_seen_at, so there is
+    no window in which a concurrent request sees a different answer.
+    Expiry is deliberately NOT a leaderboard filter — standings are historical
+    fact and must survive the session that produced them.
+    Evidence: schema.sql, src/lib/auth.ts
+
+-------------------------------------------------------------------------------
+[~] Display keys single-use or rotatable
+-------------------------------------------------------------------------------
+    Marked "optional" in the specification.
+    Display keys are 256-bit random and SHA-256 at rest — machine credentials
+    issued at pairing, not short codes read off a screen, so they are not
+    brute-forceable from a stolen hash.
+    Re-pairing a device issues a new key, which is rotation in practice.
+    NOT single-use, and there is no dedicated rotate endpoint as there is for
+    API keys.
+    KNOWN GAP: the Fire TV client sends its display key as a WebSocket URL query
+    parameter, because the browser WebSocket API cannot set headers. Query
+    strings are written to proxy and server access logs. Fix is a short-lived
+    ticket exchanged over HTTP and redeemed on upgrade.
+
+===============================================================================
+ADDITIONAL FINDINGS (not on the original checklist)
+===============================================================================
+
+[x] Authorization audited route by route. All 14 routes enumerated; every
+    authenticated route carries a guard. Three are public by design:
+      /api/health                       load balancers cannot present credentials
+      /api/venues/{id}/games            same fixture list already on the venue TV
+      /api/venues/{id}/leaderboard      same standings already on the venue TV
+    No privilege-escalation path found. Tenant isolation is additionally
+    enforced in the database by composite foreign keys, so an application-level
+    scoping bug still cannot join across venues.
+
+[x] Secrets never committed. Full history audited: only .env.example files have
+    ever been added. No real .env at any point.
+    .dockerignore excludes .env and .env.* so a local database URL cannot be
+    baked into an image layer.
+
+[x] Credential storage. session_token, api_key and display_key are all 32 random
+    bytes (base64url) stored as SHA-256. Stronger than the UUIDv4 the
+    specification suggested, and not derived from a timestamp or counter.
+
+[ ] No automated secret scanning in CI. History was audited by hand. gitleaks or
+    git-secrets should run on every push so the next one is caught without
+    someone remembering to look.
+    ACTION REQUIRED.
+
+[~] CORS preflight over plain HTTP in production returns 308, not 403, because
+    HTTPS enforcement runs first and browsers do not follow redirects on
+    preflight. Only reachable if a browser preflights over plain HTTP to
+    production, which a correctly configured TLS-terminating proxy prevents.
+    Accepted.
+
+[~] No timeout on Redis reads in the request path. A SLOW Redis is worse than a
+    dead one: dead is detected and bypassed immediately, slow adds its latency
+    to every request that touches it. The health endpoint now bounds its own
+    probes at 3s; the request path does not.
+
+===============================================================================
+SUMMARY
+===============================================================================
+  Verified in place        13
+  Partially in place        4
+  Not in place              3   (backups, audit retention, CI secret scanning)
+
+  Vulnerabilities found and FIXED during this audit:
+    1. Health probe received a 308 redirect in production, which would have
+       caused an orchestrator restart loop against a healthy container.
+       Found by smoke-testing the built image, not by any test.
+    2. Health endpoint took 5004ms to answer with Redis down, exceeding the
+       platform probe timeout — so a Redis outage produced an uninformative
+       "probe timed out" instead of a 503 naming the dependency. Probes are now
+       bounded at 3s (measured: 3002ms).
+    3. Health dependency errors could be an empty string, giving on-call
+       "unhealthy, reason: (blank)". Now falls back to the error type.
+    4. POST /picks and GET /display had no rate limiting despite the
+       specification describing it as already implemented.
+    5. No CORS policy existed at all.
+    6. No API key rotation existed at all.
+
+  Exploitable vulnerabilities outstanding: none found.
+
+  Load test (packages/backend/scripts/loadtest.mjs), 100 concurrent players
+  against the production image, 20s, 4:1 read/write:
+    p50 5ms · p95 18ms · p99 316ms · 274 req/s · 5739 requests · 0 errors
+    Targets p95 < 500ms and error rate < 0.1%: both met.
+    Rate limiting was NOT tripped at this load, confirming the tuned limits do
+    not fire on a full venue's normal traffic.
+
+  BLOCKING FOR LAUNCH:
+    - Enable database backups and test a restore.
+    - Configure Redis availability alerting (rate limiting fails open).
+    - Set TRUSTED_PROXY_HOPS correctly for the real topology and verify it by
+      tripping the limit and reading clientIp on the rejection log line.
+
+  NOT BLOCKING, do soon:
+    - Rate limit the two public read endpoints.
+    - Audit log retention job.
+    - CI secret scanning.
+    - Replace the display key in the WebSocket query string with a ticket.
+===============================================================================

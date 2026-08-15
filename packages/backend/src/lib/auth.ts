@@ -1,6 +1,7 @@
 import type { SqlExecutor } from './db';
 import { sql as defaultSql } from './db';
 import { ApiError } from './errors';
+import { logger as rootLogger } from './logger';
 import { hashToken } from './tokens';
 import { trustedUuid, type UUID } from './validators';
 
@@ -138,7 +139,14 @@ export function sessionMiddleware(deps?: Partial<AuthDeps>): Guard<SessionContex
   };
 }
 
-/** Verifies a venue API key presented as `Authorization: Bearer <key>`. */
+/**
+ * Verifies a venue API key presented as `Authorization: Bearer <key>`.
+ *
+ * A key that has just been rotated away from is still accepted until its grace
+ * window closes. Without that, rotation would sever every live client the
+ * instant it ran, and an operator who learns that once never rotates again.
+ * See `services/api-keys.ts`.
+ */
 export function adminMiddleware(deps?: Partial<AuthDeps>): Guard<AdminContext> {
   const { db } = resolveDeps(deps);
 
@@ -148,14 +156,30 @@ export function adminMiddleware(deps?: Partial<AuthDeps>): Guard<AdminContext> {
       throw ApiError.unauthorized('Missing Authorization: Bearer <api_key>');
     }
 
-    const result = await db.query<{ id: string }>(
-      'SELECT id FROM venues WHERE api_key = $1',
+    // The window is evaluated against the database clock in the same statement
+    // that matches the key, for the same reason the pick path does it: no gap
+    // in which a expiring credential could be observed two different ways. A
+    // key past its window matches nothing and fails exactly like an unknown one.
+    const result = await db.query<{ id: string; via_previous: boolean }>(
+      `SELECT id, (api_key <> $1) AS via_previous
+         FROM venues
+        WHERE api_key = $1
+           OR (previous_api_key = $1 AND previous_api_key_expires_at > NOW())`,
       [hashToken(presented)],
     );
 
     const row = result.rows[0];
     if (row === undefined) {
       throw ApiError.unauthorized('Invalid API key');
+    }
+
+    if (row.via_previous) {
+      // Surfaced so an operator can see whether anything is still on the old
+      // key before the window closes underneath it.
+      rootLogger.warn('venue authenticated with a superseded API key', {
+        component: 'auth',
+        venueId: row.id,
+      });
     }
 
     return { venueId: trustedUuid(row.id) };

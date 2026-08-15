@@ -1,0 +1,133 @@
+# FanBoard production stack.
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# This is a single-host deployment: one API container, one Postgres, one Redis.
+# It suits a pilot or a single venue group. It is NOT what to run at scale —
+# see DEPLOYMENT.md, which recommends managed Postgres and Redis so that backup,
+# failover and patching are somebody else's on-call rotation rather than yours.
+#
+# Every secret comes from the environment with no default. `docker compose` will
+# refuse to start if one is missing, which is the intended behaviour: a stack
+# that silently boots with `postgres/postgres` in production is worse than one
+# that will not boot at all.
+
+name: fanboard-prod
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: fanboard-prod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-fanboard}
+      # Matches development so ORDER BY nickname sorts identically. A collation
+      # difference between environments produces leaderboards that disagree
+      # about ordering and nothing that looks like a bug anywhere else.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Applied by the entrypoint on FIRST boot of the volume only. Schema
+      # changes after that are a migration, not a restart — see DEPLOYMENT.md.
+      - ./packages/backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    # Deliberately no `ports:`. Postgres is reachable only on the internal
+    # network. Publishing 5432 to the host is how a database ends up exposed to
+    # the internet by way of a permissive firewall rule nobody reviewed.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-fanboard}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - fanboard-prod
+
+  redis:
+    image: redis:7-alpine
+    container_name: fanboard-prod-redis
+    restart: unless-stopped
+    # allkeys-lru because everything Redis holds here is a cache or a rate-limit
+    # counter and can be rebuilt. Losing it costs latency, not correctness — the
+    # game lock is enforced by Postgres in the same statement that writes a pick.
+    command:
+      [
+        "redis-server",
+        "--appendonly", "yes",
+        "--maxmemory", "${REDIS_MAXMEMORY:-512mb}",
+        "--maxmemory-policy", "allkeys-lru",
+        "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}",
+      ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - fanboard-prod
+
+  backend:
+    build:
+      # Root context: this is an npm workspaces repo and the lockfile is here.
+      # A context of ./packages/backend cannot see it and `npm ci` fails.
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    image: fanboard-backend:${IMAGE_TAG:-latest}
+    container_name: fanboard-prod-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-fanboard}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      THESPORTSDB_API_KEY: ${THESPORTSDB_API_KEY:?THESPORTSDB_API_KEY is required}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+      # No default. An empty allowlist denies every cross-origin browser call,
+      # which is the correct failure mode for a misconfigured deployment.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+      # How many proxies sit in front. The rate limiter counts X-Forwarded-For
+      # from the right by this many hops; too high and a client can spoof its
+      # address past the limiter, too low and every request looks like the proxy.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # Bound to loopback: TLS terminates at the reverse proxy on this host,
+      # which is the only thing that should be able to reach the app directly.
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3100:3100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Long enough for the worker scheduler to finish an in-flight grading
+    # transaction. The default 10s can cut one short mid-deploy.
+    stop_grace_period: 30s
+    networks:
+      - fanboard-prod
+
+volumes:
+  postgres-data:
+    name: fanboard-prod-postgres-data
+  redis-data:
+    name: fanboard-prod-redis-data
+
+networks:
+  fanboard-prod:
+    name: fanboard-prod
+    driver: bridge

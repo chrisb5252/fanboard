@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server';
 import { assertDeviceScope, deviceMiddleware } from '../../../../../lib/auth';
-import { DISPLAY_TTL_SECONDS } from '../../../../../lib/cache-keys';
+import {
+  DISPLAY_READS_PER_DEVICE_PER_MINUTE,
+  DISPLAY_TTL_SECONDS,
+  SHORT_RATE_LIMIT_WINDOW_MS,
+  displayRateKey,
+} from '../../../../../lib/cache-keys';
 import { toErrorBody } from '../../../../../lib/errors';
 import { logger as rootLogger } from '../../../../../lib/logger';
+import { tooManyRequests } from '../../../../../lib/rate-limit-response';
+import { consumeRateLimit } from '../../../../../lib/rate-limiter';
 import { validateDeviceId } from '../../../../../lib/validators';
 import { getDisplayPayload } from '../../../../../services/display';
 
@@ -30,6 +37,24 @@ export async function GET(
 
     const device = await requireDevice(request);
     assertDeviceScope(device, deviceId);
+
+    // One misbehaving stick — rebooting into a tight retry loop is the usual
+    // way — must not degrade the other displays at the venue. Keyed by the
+    // authenticated device so a throttled one cannot affect its neighbours.
+    const limit = await consumeRateLimit(
+      displayRateKey(deviceId),
+      DISPLAY_READS_PER_DEVICE_PER_MINUTE,
+      SHORT_RATE_LIMIT_WINDOW_MS,
+    );
+    if (!limit.allowed) {
+      log.warn('display read rejected by per-device rate limit', {
+        deviceId,
+        venueId: device.venueId,
+        count: limit.count,
+        limit: limit.limit,
+      });
+      return tooManyRequests(limit, 'device', 'Display is polling too fast.');
+    }
 
     // venueId comes from the statement that verified the key, not from a
     // cached mapping, so it cannot be stale relative to the credential.
