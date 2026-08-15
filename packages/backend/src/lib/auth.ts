@@ -117,6 +117,7 @@ export function sessionMiddleware(deps?: Partial<AuthDeps>): Guard<SessionContex
           SET last_seen_at = NOW()
         WHERE session_token = $1
           AND expired = FALSE
+          AND expires_at > NOW()
           AND last_seen_at > NOW() - make_interval(hours => $2::int)
         RETURNING id, venue_id, nickname`,
       [hashToken(presented), SESSION_IDLE_TIMEOUT_HOURS],

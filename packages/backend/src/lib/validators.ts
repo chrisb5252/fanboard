@@ -26,7 +26,30 @@ export type PredictedWinner = (typeof PREDICTED_WINNERS)[number];
 
 const predictedWinnerSchema = z.enum(PREDICTED_WINNERS);
 
-export const NICKNAME_MAX_LENGTH = 50;
+export const NICKNAME_MIN_LENGTH = 2;
+export const NICKNAME_MAX_LENGTH = 30;
+
+/**
+ * Names that would let a patron pass themselves off as staff on the TV.
+ *
+ * Matched as standalone words, not substrings. A substring match rejects
+ * "Badminton" (which contains "admin") and other ordinary words, and a
+ * validator that refuses legitimate names trains people to fight it.
+ *
+ * This is deterrence, not prevention: "admin1" still passes. Actually stopping
+ * impersonation needs a visual marker on the leaderboard for real staff, which
+ * a nickname rule cannot substitute for.
+ */
+const RESERVED_WORDS =
+  /\b(?:admin|administrator|moderator|system|root|staff|fanboard)\b/iu;
+
+/** Long digit runs are the signature of generated spam handles. */
+const DIGIT_RUN = /\d{5,}/u;
+
+/** Six or more of the same character in a row. */
+const REPEATED_RUN = /(.)\1{5,}/u;
+
+const ONLY_DIGITS = /^\d+$/u;
 
 /**
  * Nickname whitelist: letters and digits in any script, plus spaces and a small
@@ -146,6 +169,9 @@ export function validateNickname(nick: unknown): string {
   if (normalized.length === 0) {
     fail('nickname', 'must not be empty');
   }
+  if (normalized.length < NICKNAME_MIN_LENGTH) {
+    fail('nickname', `must be at least ${NICKNAME_MIN_LENGTH} characters`);
+  }
   if (normalized.length > NICKNAME_MAX_LENGTH) {
     fail('nickname', `must be at most ${NICKNAME_MAX_LENGTH} characters`);
   }
@@ -154,6 +180,18 @@ export function validateNickname(nick: unknown): string {
   }
   if (!NICKNAME_HAS_SUBSTANCE.test(normalized)) {
     fail('nickname', 'must contain at least one letter or number');
+  }
+  if (ONLY_DIGITS.test(normalized)) {
+    fail('nickname', 'cannot be only numbers');
+  }
+  if (DIGIT_RUN.test(normalized)) {
+    fail('nickname', 'cannot contain long runs of digits');
+  }
+  if (REPEATED_RUN.test(normalized)) {
+    fail('nickname', 'has too many repeated characters');
+  }
+  if (RESERVED_WORDS.test(normalized)) {
+    fail('nickname', 'uses a reserved word');
   }
 
   return normalized;

@@ -10,6 +10,7 @@ import {
 import { toErrorBody } from '../../../../../lib/errors';
 import { getClientIpDetailed } from '../../../../../lib/ip-extractor';
 import { logger as rootLogger } from '../../../../../lib/logger';
+import { recordRateLimitRejection } from '../../../../../lib/rate-limit-monitor';
 import { consumeRateLimit, type RateLimitDecision } from '../../../../../lib/rate-limiter';
 import { parseJsonBody, validateNickname, validateVenueId } from '../../../../../lib/validators';
 import { createPlayerSession } from '../../../../../services/players';
@@ -90,6 +91,13 @@ async function enforceRateLimits(
         count: perIp.count,
         limit: perIp.limit,
       });
+      await recordRateLimitRejection({
+        venueId,
+        clientIp: ip,
+        scope: 'ip',
+        count: perIp.count,
+        limit: perIp.limit,
+      });
       return tooManyRequests(perIp, 'ip');
     }
   } else {
@@ -110,6 +118,13 @@ async function enforceRateLimits(
   if (!perVenue.allowed) {
     log.error('player session rejected by per-venue rate limit', {
       venueId,
+      count: perVenue.count,
+      limit: perVenue.limit,
+    });
+    await recordRateLimitRejection({
+      venueId,
+      clientIp: ip,
+      scope: 'venue',
       count: perVenue.count,
       limit: perVenue.limit,
     });

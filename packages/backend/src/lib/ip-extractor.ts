@@ -155,7 +155,7 @@ export interface ClientIpResult {
   /** The rate-limit bucket, or null when no address could be trusted. */
   readonly ip: string | null;
   /** Why, for logging. */
-  readonly source: 'x-forwarded-for' | 'x-real-ip' | 'none';
+  readonly source: 'x-forwarded-for' | 'cf-connecting-ip' | 'x-real-ip' | 'none';
 }
 
 /**
@@ -193,14 +193,23 @@ export function getClientIpDetailed(request: Request): ClientIpResult {
     }
   }
 
-  // nginx sets x-real-ip by overwriting rather than appending, so it carries no
-  // attacker-controlled prefix — but it is only meaningful if a proxy is in
-  // front, which the hops check above has established.
-  const realIp = request.headers.get('x-real-ip');
-  if (realIp !== null && realIp.trim() !== '') {
-    const normalised = normaliseIp(realIp);
-    if (normalised !== null) {
-      return { ip: normalised, source: 'x-real-ip' };
+  // Single-value headers, consulted only after X-Forwarded-For and only once
+  // the hops check above has established that a proxy is in front. Both are set
+  // by overwriting rather than appending, so they carry no attacker-controlled
+  // prefix — but that is only true of the proxy that actually sets them.
+  //
+  // A deployment NOT behind Cloudflare must not reach cf-connecting-ip with an
+  // attacker-supplied value. In practice it does not: any real proxy sets
+  // X-Forwarded-For, which is preferred above, so this is reached only when the
+  // fronting proxy sets neither — a topology where nothing is trustworthy
+  // anyway. Ordering is what makes it safe, not the header itself.
+  for (const header of ['cf-connecting-ip', 'x-real-ip'] as const) {
+    const value = request.headers.get(header);
+    if (value !== null && value.trim() !== '') {
+      const normalised = normaliseIp(value);
+      if (normalised !== null) {
+        return { ip: normalised, source: header };
+      }
     }
   }
 

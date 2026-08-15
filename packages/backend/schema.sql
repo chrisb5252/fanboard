@@ -118,6 +118,10 @@ CREATE TABLE IF NOT EXISTS player_sessions (
   last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expired       BOOLEAN     NOT NULL DEFAULT FALSE,
+  -- Absolute cap on a session's life, independent of the 12-hour idle timeout.
+  -- Used for authentication only. It deliberately does NOT filter leaderboards:
+  -- see the note below.
+  expires_at    TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
 
   -- Target for the composite foreign key from picks.
   CONSTRAINT player_sessions_venue_id_id_key UNIQUE (venue_id, id)
@@ -133,8 +137,13 @@ ALTER TABLE player_sessions ADD CONSTRAINT player_sessions_nickname_check
 
 COMMENT ON COLUMN player_sessions.session_token IS
   'SHA-256 hash of the bearer token held in the phone browser. The raw token is never stored.';
+ALTER TABLE player_sessions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+  NOT NULL DEFAULT (NOW() + INTERVAL '24 hours');
+
 COMMENT ON COLUMN player_sessions.expired IS
   'Soft-expiry flag. Set by the reaper job so historical picks and leaderboards stay intact.';
+COMMENT ON COLUMN player_sessions.expires_at IS
+  'Absolute session lifetime, enforced at authentication. NOT a leaderboard filter: standings are historical fact and must survive the session that produced them.';
 
 CREATE INDEX IF NOT EXISTS idx_player_sessions_venue_last_seen
   ON player_sessions (venue_id, last_seen_at DESC)

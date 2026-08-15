@@ -234,6 +234,62 @@ Remember to remove the probe sessions afterwards.
 
 ---
 
+## Defence in depth on the same endpoint
+
+Rate limiting bounds how *many* sessions an address can create. These bound what
+each one can be.
+
+### Nickname rules
+
+`validateNickname` — 2 to 30 characters after NFC normalisation and whitespace
+collapse, from a Unicode letter/number whitelist, and additionally rejecting:
+
+| Rule | Rejects | Allows |
+| --- | --- | --- |
+| all digits | `111111111` | — |
+| 5+ digit run | `Player12345` | `Dave1987` |
+| 6+ repeated chars | `aaaaaaaa`, `Loooooool` | `Loool` |
+| reserved words | `admin`, `Moderator`, `system`, `root`, `staff` | `Badminton`, `Systematic` |
+
+Reserved words match as **standalone words**, not substrings. Substring matching
+rejects `Badminton` — it contains `admin` — and a validator that refuses real
+names trains people to fight it. The tradeoff is that `admin1` still passes:
+this is impersonation *deterrence*. Preventing it needs a visual staff marker on
+the leaderboard, which no nickname rule substitutes for.
+
+The validator caps at 30 while `player_sessions.nickname` permits 50. Stricter
+than the constraint is the safe direction — an over-long nickname is a clean
+400, never a constraint violation surfaced as a 500.
+
+### Nickname holds
+
+A live session holds its nickname at that venue for 60 minutes
+(`NICKNAME_HOLD_MINUTES`). A second claimant gets **409 `nickname_taken`**.
+Matching is case-insensitive; the hold releases when the holder passes its
+window, is marked `expired`, or passes `expires_at`.
+
+The check lives inside the INSERT (`WHERE NOT EXISTS (...)`), not before it. A
+check-then-insert lets two simultaneous "Mike" requests both observe an empty
+table and both write. Verified: 8 concurrent claims produce exactly one row.
+
+> **Product tradeoff.** This enables name squatting. A patron — or an attacker
+> spending their 5-per-hour budget — can hold common names, and in a busy venue
+> "Mike" collides constantly. Consider a suffix suggestion (`Mike2`) in the
+> client rather than a hard 409, or shortening the hold.
+
+### Session expiry
+
+`player_sessions.expires_at` defaults to 24 hours out and is enforced in
+`sessionMiddleware`, alongside the existing 12-hour idle timeout. An expired
+session cannot authenticate: pick submission returns 401.
+
+> **It deliberately does not filter leaderboards.** Filtering standings by
+> session expiry empties the all-time board every 24 hours — points already
+> awarded for graded picks would silently vanish. Standings are historical fact
+> and must outlive the session that produced them; `leaderboard_snapshot`
+> denormalises `nickname` for exactly this reason. There is a test asserting an
+> expired player still appears with their points.
+
 ## Failure modes
 
 ### Redis unreachable — fails open
@@ -358,6 +414,7 @@ rejection; TTL always armed; real expiry and recovery; fail-open on Redis error;
 | Sustained `rejected by per-venue rate limit` | Medium | Likely distributed abuse, or a venue genuinely outgrowing 500/hour |
 | Occasional `rejected by per-IP rate limit` | None | The limit doing its job |
 | Same `clientIp` rejected across many `venueId`s | Medium | Coordinated abuse; the log line carries both fields |
+| `possible attack: repeated rate limit rejections from one client` | **High** | One address past 10 rejections in an hour. Fires **once** per address per window, on the crossing only, so one attacker cannot become a page storm |
 
 ### Metrics
 
