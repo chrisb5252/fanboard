@@ -78,6 +78,17 @@ function scrubSecrets(line: string): string {
   return scrubbed;
 }
 
+/**
+ * Runs the same key-based redaction the logger applies, for callers that
+ * persist structured context rather than log it (audit details, for one).
+ *
+ * Shares SENSITIVE_KEY_PATTERN deliberately: two copies of a redaction rule
+ * drift, and the copy that drifts is the one that leaks.
+ */
+export function redactSensitive(value: unknown): unknown {
+  return serialize(value, 0);
+}
+
 function serialize(value: unknown, depth: number): unknown {
   if (value instanceof Error) {
     return { name: value.name, message: value.message, stack: value.stack };

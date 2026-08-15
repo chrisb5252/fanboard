@@ -192,6 +192,9 @@ src/lib/health.ts             shared probe shape for dependency checks
 | `POST /api/venues/:venueId/players` | none | 201 + cookie | 400, 404 |
 | `POST /api/venues/:venueId/picks` | session cookie | 201 new · 200 changed | 400, 401, 403, 404, 423 |
 | `GET /api/venues/:venueId/leaderboard?period=` | none (public) | 200 | 400 |
+| `GET·POST /api/admin/venues/:venueId/config` | `Bearer <api_key>` | 200 | 400, 401, 403, 404 |
+| `GET /api/admin/venues/:venueId/players?limit=&offset=` | `Bearer <api_key>` | 200 | 400, 401, 403 |
+| `GET /api/admin/venues/:venueId/picks?gameId=&playerId=&status=` | `Bearer <api_key>` | 200 | 400, 401, 403 |
 | `POST /api/admin/venues/:venueId/device-pairing` | `Bearer <api_key>` | 201 + display key | 400, 401, 403, 404, 409 |
 | `GET /api/admin/venues/:venueId/device-status` | `Bearer <api_key>` | 200 | 400, 401, 403 |
 | `GET /api/devices/:deviceId/display` | `x-display-key` | 200 | 400, 401, 404 |
@@ -234,6 +237,60 @@ TLS — see `.env.example`.
 
 `assertVenueScope` rejects a valid session acting on a different venue than the
 one in the URL. Without it, changing the venue id in the path would be enough.
+
+### Admin surfaces
+
+**Venue config** stores enabled leagues as a JSONB array on `venues`, validated
+against a whitelist (`NFL NBA MLB NHL NCAAFB NCAAB`) and stored in canonical
+order so `["NBA","NFL"]` and `["NFL","NBA"]` do not read as different
+configurations in an audit diff. Nothing consumes it yet; `poll-games` already
+accepts `FetchGamesOptions.leagues`, so wiring it up is passing the stored codes
+into that call.
+
+The codes are FanBoard's vocabulary, and for NFL they happen to match — events
+on the provider's American Football feed come back with `strLeague` exactly
+`"NFL"`. **`NCAAFB` and `NCAAB` are unverified**: the free API key does not
+expose the college feeds. Confirm those against the provider before relying on
+them, or a venue that enables only college sport will silently ingest nothing.
+
+**Player list** aggregates totals from `picks`, not from `leaderboard_snapshot`.
+A snapshot is period-scoped and only exists after the materialisation worker has
+run, so joining it would report 0 for every player at a venue whose leaderboard
+has not been built, and would quietly mean "today" rather than "ever". The
+aggregate is a `LEFT JOIN LATERAL` so it runs once per row on the page rather
+than over the venue's whole pick history. Expired sessions are included, unlike
+the app path — an operator asking "where did that player go" needs to see them.
+
+**Picks inspector** filters `status=pending` on `graded_at IS NULL`, **not** on
+`points IS NULL` as originally specified. A voided pick from a cancelled game
+has NULL points but is finished; a points-based filter reports every one of them
+as pending, sending an operator hunting a grading bug that is not there — which
+is exactly the misreading this endpoint exists to prevent. `status=voided`
+isolates them, and `all` skips the predicate entirely.
+
+### Audit logging
+
+`auditLog(action, userId, venueId, details)` appends to `audit_logs`. Two
+properties it guarantees:
+
+- **It never throws.** An audit write failing must not turn a successful config
+  change into a 500 — the action already happened, and reporting failure invites
+  the operator to repeat it. Failures are logged at error level instead. The
+  tradeoff is explicit: this is an operational trail, not a compliance ledger. If
+  it must become one, the write belongs in the same transaction as the action.
+- **Details are redacted** with the same rule the logger uses (`redactSensitive`
+  shares `SENSITIVE_KEY_PATTERN` — two copies of a redaction rule drift, and the
+  copy that drifts is the one that leaks), so passing a whole request body cannot
+  persist a credential into a table that is by design never deleted.
+
+`user_id` is **always NULL today**. Admin auth is a venue API key, which
+identifies a venue rather than a person, so the column is meaningful only once
+admin accounts exist. Config changes record before/after — "who turned NBA off"
+cannot be answered by the new value alone.
+
+`audit_logs` cascades on venue deletion. That is wrong for a compliance log and
+right for a deletion request; drop the foreign key if these must outlive their
+venue.
 
 ### Fire TV displays
 

@@ -42,16 +42,28 @@ COMMENT ON FUNCTION set_updated_at() IS
 -- -----------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS venues (
-  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  name        TEXT        NOT NULL CHECK (length(btrim(name)) > 0),
-  api_key     TEXT        NOT NULL UNIQUE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            TEXT        NOT NULL CHECK (length(btrim(name)) > 0),
+  api_key         TEXT        NOT NULL UNIQUE,
+  -- Leagues this venue shows. JSONB array of whitelist codes, e.g. ["NFL"].
+  enabled_leagues JSONB       NOT NULL DEFAULT '[]'::jsonb
+                              CHECK (jsonb_typeof(enabled_leagues) = 'array'),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Bring an already-initialised database in line; the column definition above
+-- only applies on first creation.
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS enabled_leagues JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_enabled_leagues_is_array;
+ALTER TABLE venues ADD CONSTRAINT venues_enabled_leagues_is_array
+  CHECK (jsonb_typeof(enabled_leagues) = 'array');
 
 COMMENT ON TABLE venues IS 'Tenant root; every other table cascades from here.';
 COMMENT ON COLUMN venues.api_key IS
   'SHA-256 hash of the venue API key. Provision with: encode(sha256(''<raw key>''::bytea), ''hex'')';
+COMMENT ON COLUMN venues.enabled_leagues IS
+  'Whitelisted league codes this venue ingests, e.g. ["NFL","NBA"]. Empty array means no filter.';
 
 DROP TRIGGER IF EXISTS venues_set_updated_at ON venues;
 CREATE TRIGGER venues_set_updated_at
@@ -127,6 +139,13 @@ COMMENT ON COLUMN player_sessions.expired IS
 CREATE INDEX IF NOT EXISTS idx_player_sessions_venue_last_seen
   ON player_sessions (venue_id, last_seen_at DESC)
   WHERE NOT expired;
+
+-- The admin player list, which unlike the app path deliberately includes
+-- expired sessions -- an operator debugging "where did that player go" needs to
+-- see them. The partial index above cannot serve that, because the rows it
+-- excludes are exactly the ones being asked about.
+CREATE INDEX IF NOT EXISTS idx_player_sessions_venue_last_seen_all
+  ON player_sessions (venue_id, last_seen_at DESC);
 
 -- -----------------------------------------------------------------------------
 -- games — schedule rows ingested per venue from TheSportsDB.
@@ -311,5 +330,49 @@ CREATE INDEX IF NOT EXISTS idx_leaderboard_snapshot_venue_period_rank
 -- Serves "give me the newest snapshot for this venue+period" before ranking.
 CREATE INDEX IF NOT EXISTS idx_leaderboard_snapshot_venue_period_computed_at
   ON leaderboard_snapshot (venue_id, period, computed_at DESC);
+
+-- -----------------------------------------------------------------------------
+-- audit_logs — an append-only record of privileged actions.
+--
+-- The prompt that introduced this table was truncated before the DDL, so the
+-- shape below is derived from the auditLog(action, userId?, venueId, details?)
+-- signature it specified. Two choices worth challenging:
+--
+--   * user_id is TEXT and nullable. Admin auth is a venue API key, which
+--     identifies a *venue*, not a person, so every row written today has a NULL
+--     user_id. It becomes meaningful only once admin accounts exist. TEXT
+--     rather than a UUID FK so it can hold whatever identity scheme lands.
+--
+--   * ON DELETE CASCADE. Deleting a venue erases its audit trail, which is
+--     wrong for a compliance log and right for a deletion request. It is
+--     consistent with every other table here. If these records must outlive
+--     their venue, drop the foreign key and keep venue_id as a bare UUID.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  action     TEXT        NOT NULL CHECK (length(btrim(action)) > 0),
+  user_id    TEXT,
+  venue_id   UUID        NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  details    JSONB       NOT NULL DEFAULT '{}'::jsonb
+                         CHECK (jsonb_typeof(details) = 'object'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE audit_logs IS
+  'Append-only record of privileged actions. Never updated or deleted by application code.';
+COMMENT ON COLUMN audit_logs.user_id IS
+  'Always NULL while admin auth is a venue API key: that credential identifies a venue, not a person.';
+COMMENT ON COLUMN audit_logs.details IS
+  'Action-specific context. Credential-shaped keys are redacted before insert; never put a secret here.';
+
+-- "What happened at this venue, most recent first" — the only way this table is
+-- read today.
+CREATE INDEX IF NOT EXISTS idx_audit_logs_venue_created_at
+  ON audit_logs (venue_id, created_at DESC);
+
+-- "Every occurrence of this action", for tracing one kind of change across time.
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created_at
+  ON audit_logs (action, created_at DESC);
 
 COMMIT;

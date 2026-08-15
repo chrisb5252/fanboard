@@ -160,6 +160,58 @@ export function validateNickname(nick: unknown): string {
 }
 
 /**
+ * Optional UUID query parameter. Absent means "no filter"; present but
+ * malformed is a 400 rather than a silently ignored filter, which would return
+ * a superset of what the caller asked for.
+ */
+export function validateOptionalUuid(field: string, value: unknown): UUID | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  return parseUuid(field, value);
+}
+
+/**
+ * Parses a non-negative integer query parameter.
+ *
+ * Rejects "50abc" and "1e3" rather than accepting what parseInt would salvage:
+ * a limit the caller did not write is a limit they cannot reason about.
+ */
+function parseNonNegativeInt(field: string, value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    fail(field, 'must be a number');
+  }
+  const text = String(value).trim();
+  if (!/^\d+$/.test(text)) {
+    fail(field, 'must be a non-negative integer');
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    fail(field, 'is out of range');
+  }
+  return parsed;
+}
+
+/** Clamps rather than rejects an over-large limit: the cap is the contract. */
+export function validateLimit(value: unknown, fallback: number, max: number): number {
+  const parsed = parseNonNegativeInt('limit', value);
+  if (parsed === undefined) {
+    return fallback;
+  }
+  if (parsed === 0) {
+    fail('limit', 'must be at least 1');
+  }
+  return Math.min(parsed, max);
+}
+
+export function validateOffset(value: unknown): number {
+  return parseNonNegativeInt('offset', value) ?? 0;
+}
+
+/**
  * Asserts a value that is already known to be a UUID — ids read back out of the
  * database, which the `uuid` column type has already guaranteed.
  *

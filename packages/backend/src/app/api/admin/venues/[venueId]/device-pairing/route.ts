@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { AUDIT_ACTIONS, auditLog } from '../../../../../../lib/audit';
 import { adminMiddleware, assertVenueScope } from '../../../../../../lib/auth';
 import { toErrorBody } from '../../../../../../lib/errors';
 import { logger as rootLogger } from '../../../../../../lib/logger';
@@ -40,6 +41,14 @@ export async function POST(
     const fireTvDeviceId = validateFireTvDeviceId(body['fireTvDeviceId']);
 
     const device = await pairDevice({ venueId, displayName, fireTvDeviceId });
+
+    // Records the pairing, never the key: auditLog redacts credential-shaped
+    // keys, and none is passed here in the first place.
+    await auditLog(AUDIT_ACTIONS.devicePaired, undefined, venueId, {
+      deviceId: device.deviceId,
+      displayName: device.displayName,
+      fireTvDeviceId,
+    });
 
     // The device id and name are safe to log. The key is not, and is not logged.
     log.info('device paired', { venueId, deviceId: device.deviceId, displayName });
