@@ -78,16 +78,23 @@ COPY packages/backend/schema.sql ./packages/backend/
 RUN chown -R node:node /app
 USER node
 
-# 3000 is the API. 3100 is the WebSocket listener, which runs in this same
-# process on its own port because Next's App Router does not expose its HTTP
-# server for an upgrade handler.
+# 3000 is the API's default. `npm start` runs a bare `next start`, which binds
+# $PORT when the platform sets one (Railway, Cloud Run, Heroku all do) and
+# falls back to 3000 otherwise — verified both ways.
+#
+# 3100 is the WebSocket listener, in this same process on its own port because
+# Next's App Router does not expose its HTTP server for an upgrade handler.
+# NOTE: a platform that publishes only ONE port per service cannot reach it.
+# See DEPLOYMENT.md.
 EXPOSE 3000
 EXPOSE 3100
 
-# The platform health check hits the same endpoint the runbooks use. Start
-# period allows for the first database connection and the worker boot.
+# The platform health check hits the same endpoint the runbooks use. It reads
+# PORT rather than assuming 3000, so setting PORT does not silently break the
+# check and get a healthy container restarted. Start period allows for the
+# first database connection and the worker boot.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.PORT||3000;fetch('http://127.0.0.1:'+p+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 WORKDIR /app/packages/backend
 CMD ["npm", "start"]

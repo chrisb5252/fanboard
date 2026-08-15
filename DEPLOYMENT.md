@@ -200,6 +200,89 @@ the logs, and confirm `TRUSTED_PROXY_HOPS` by tripping the session rate limit
 and reading `clientIp` on the rejection line — it must be the real client
 address, not the proxy's.
 
+## Railway
+
+Railway builds from the repo and injects `$PORT`. Four things differ from the
+generic path above.
+
+### Variables
+
+Set these on the **backend** service (Variables tab). `DATABASE_URL` and
+`REDIS_URL` come from Railway's Postgres and Redis plugins — reference them
+rather than pasting literals, so a credential rotation on the plugin does not
+silently break the app:
+
+```bash
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+REDIS_URL=${{Redis.REDIS_URL}}
+THESPORTSDB_API_KEY=<your key>
+NEXT_PUBLIC_API_URL=https://<backend>.up.railway.app
+
+NODE_ENV=production
+NEXT_MANUAL_SIG_HANDLE=1
+TRUSTED_PROXY_HOPS=1
+
+# Every frontend origin that calls the API. No default in production — unset
+# means every cross-origin browser call is denied.
+CORS_ALLOWED_ORIGINS=https://<mobile>.up.railway.app,https://<admin>.up.railway.app,https://<tv>.up.railway.app
+```
+
+Do **not** set `PORT`. Railway provides it and `next start` reads it.
+
+`CORS_ALLOWED_ORIGINS` is the one that bites: each Vite app is its own Railway
+service on its own domain, so every call from them is cross-origin. Leave it
+unset and the API refuses all of them — deliberately, since the alternative is
+trusting an origin nobody chose. The values must be scheme + host with no
+trailing slash and no path.
+
+`TRUSTED_PROXY_HOPS=1` matches Railway's single edge proxy. Verify it rather
+than trusting it: trip the session rate limit and check `clientIp` on the
+rejection log line is the real client address, not Railway's.
+
+### Schema
+
+Railway will not apply `schema.sql` for you. Run it against the plugin database
+after the first deploy and after any release that changes it — including the
+key-rotation columns (`previous_api_key`, `previous_api_key_expires_at`):
+
+```bash
+railway run --service <backend> psql "$DATABASE_URL" -f packages/backend/schema.sql
+```
+
+It is idempotent, so re-running is safe and is how column additions land.
+
+### The WebSocket is not reachable on Railway
+
+**Realtime does not work on Railway as currently deployed.** This is a real
+limitation, not a configuration mistake to hunt for:
+
+- The realtime listener binds its own port (3100). Next's App Router does not
+  hand out its HTTP server, so an upgrade handler cannot share the API's port
+  without a custom server.
+- That design assumes a reverse proxy routing `/ws` → 3100. Railway publishes
+  exactly **one** port per service and provides no such proxy.
+- In production the Vite apps are static builds. `vite.config.ts`'s `/ws` proxy
+  only applies to `vite dev` and `vite preview`, so it does nothing here.
+
+The visible symptom is mild, which is why it is easy to miss: clients fail to
+connect, retry on their backoff schedule, and **keep polling**, so screens and
+phones still update — just on the poll interval rather than instantly. Polling
+was deliberately kept alongside the socket for exactly this reason.
+
+Options, in increasing order of effort:
+
+1. **Accept it.** Displays refresh every 10s and phones on their own timer. For
+   a pilot this is genuinely fine.
+2. **Custom Next server.** One HTTP server that delegates to Next's handler and
+   handles `/ws` upgrades itself, so both share `$PORT`. The real work is that
+   the WebSocket module is TypeScript and a custom server needs it compiled —
+   put the `WebSocketServer` in `noServer` mode and have the server delegate
+   upgrades to it.
+3. **Separate WebSocket service.** Works, but the patron socket authenticates
+   with an httpOnly **cookie** that rides the handshake *because it is
+   same-origin*. A different domain drops it, so this needs a cookie scoped to a
+   shared parent domain or a token exchange — more invasive than option 2.
+
 ## 9. Load test
 
 ```bash

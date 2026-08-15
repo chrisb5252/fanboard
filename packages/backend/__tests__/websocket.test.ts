@@ -200,6 +200,29 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('websocket server', () => {
     players = await import('../src/services/players');
     ws = await import('../src/lib/websocket');
 
+    // This block is gated on TEST_DATABASE_URL, but two of its tests need real
+    // Redis pub/sub — they are the only ones anywhere that exercise
+    // publish -> Redis -> subscriber -> socket, which is the path production
+    // actually uses. Without this check an unreachable Redis surfaces as two
+    // 20-second timeouts and an opaque assertion, which reads as a flaky test
+    // and invites someone to skip it. It is a misconfigured REDIS_URL.
+    // Bounded, because an unreachable Redis makes the client retry rather than
+    // reject: an unguarded ping simply hangs until the hook timeout, turning a
+    // fast, clear failure into a slow, silent one.
+    const { pingRedis } = await import('../src/lib/redis');
+    const redisUp = await Promise.race([
+      pingRedis().catch(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3_000)),
+    ]);
+    if (!redisUp) {
+      throw new Error(
+        `websocket integration tests need Redis, and none is reachable at ` +
+          `${process.env['REDIS_URL']}. Start it with \`npm run infra:up\` ` +
+          `(or set REDIS_URL). Do not skip these tests: they are the only ` +
+          `coverage of the realtime delivery path.`,
+      );
+    }
+
     await db.query('DELETE FROM venues WHERE name LIKE $1', [`${PREFIX}-%`]);
     venueA = await seedVenue('a');
     venueB = await seedVenue('b');
@@ -312,7 +335,7 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('websocket server', () => {
     expect(two.received.some((m) => (m as { type: string }).type === 'game_locked')).toBe(true);
   }, 20_000);
 
-  it.skip('carries a broadcast through Redis to the socket well inside 2 seconds', async () => {
+  it('carries a broadcast through Redis to the socket well inside 2 seconds', async () => {
     // `deliver` only proves the local room works. In production nothing calls
     // it directly: a worker publishes, Redis fans out, and the subscriber in
     // each instance delivers. This exercises that whole path with no stubs,
