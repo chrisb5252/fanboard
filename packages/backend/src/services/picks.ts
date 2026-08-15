@@ -207,6 +207,84 @@ async function buildRejection(
   });
 }
 
+export interface MyPick {
+  pickId: UUID;
+  gameId: UUID;
+  homeTeam: string;
+  awayTeam: string;
+  league: string;
+  scheduledAt: string;
+  gameStatus: string;
+  predictedWinner: PredictedWinner;
+  /** null while pending and for voided picks; pair with gradedAt to tell apart. */
+  correct: boolean | null;
+  points: number | null;
+  submittedAt: string;
+  gradedAt: string | null;
+}
+
+const MY_PICKS_SQL = `
+SELECT p.id,
+       p.game_id,
+       g.home_team,
+       g.away_team,
+       g.league,
+       g.scheduled_at,
+       g.status AS game_status,
+       p.predicted_winner,
+       p.correct,
+       p.points,
+       p.submitted_at,
+       p.graded_at
+  FROM picks p
+  JOIN games g
+    ON g.id = p.game_id
+   AND g.venue_id = p.venue_id
+ WHERE p.venue_id = $1::uuid
+   AND p.player_session_id = $2::uuid
+ ORDER BY g.scheduled_at DESC, p.submitted_at DESC
+ LIMIT 200
+`;
+
+/** One player's own picks, joined to enough game detail to render a row. */
+export async function listMyPicks(
+  venueId: UUID,
+  playerSessionId: UUID,
+  deps?: Partial<PickServiceDeps>,
+): Promise<MyPick[]> {
+  const { db } = resolveDeps(deps);
+
+  const result = await db.query<{
+    id: string;
+    game_id: string;
+    home_team: string;
+    away_team: string;
+    league: string;
+    scheduled_at: Date;
+    game_status: string;
+    predicted_winner: string;
+    correct: boolean | null;
+    points: number | null;
+    submitted_at: Date;
+    graded_at: Date | null;
+  }>(MY_PICKS_SQL, [venueId, playerSessionId]);
+
+  return result.rows.map((row) => ({
+    pickId: trustedUuid(row.id),
+    gameId: trustedUuid(row.game_id),
+    homeTeam: row.home_team,
+    awayTeam: row.away_team,
+    league: row.league,
+    scheduledAt: row.scheduled_at.toISOString(),
+    gameStatus: row.game_status,
+    predictedWinner: row.predicted_winner as PredictedWinner,
+    correct: row.correct,
+    points: row.points,
+    submittedAt: row.submitted_at.toISOString(),
+    gradedAt: row.graded_at?.toISOString() ?? null,
+  }));
+}
+
 async function invalidatePicksCache(
   venueId: UUID,
   cacheDel: PickServiceDeps['cacheDel'],

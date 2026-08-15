@@ -1,11 +1,25 @@
+/*
+ * Phone-first, 375px minimum. Dark by default: this is used in a dim bar, and a
+ * white screen at a table at night is unpleasant and conspicuous.
+ *
+ * Every interactive target is at least 44px. Contrast on text against --bg is
+ * kept above 4.5:1.
+ */
+
 :root {
   color-scheme: dark;
   --bg: #0b0f19;
-  --panel: #121826;
-  --fg: #e8ecf6;
-  --muted: #8b94ad;
-  --line: #1e2739;
+  --surface: #141a29;
+  --surface-2: #1b2334;
+  --fg: #f2f5fb;
+  --muted: #9aa5bd;
+  --line: #263149;
   --accent: #4ade80;
+  --accent-ink: #05140b;
+  --live: #f87171;
+  --warn: #fbbf24;
+  --touch: 44px;
+  --nav-height: 64px;
 }
 
 * {
@@ -22,45 +36,522 @@ body,
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.5;
-  /* Phones only: never let the pick sheet get lost behind a home indicator. */
-  padding: env(safe-area-inset-top) env(safe-area-inset-right)
-    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.45;
   -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: contain;
 }
 
-.shell {
-  max-width: 30rem;
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* --- shell ---------------------------------------------------------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom));
+}
+
+.app__header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: calc(0.75rem + env(safe-area-inset-top)) 1rem 0.75rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.app__title {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.app__player {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.875rem;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app__main {
+  flex: 1;
+}
+
+.screen {
+  padding: 2rem 1.25rem calc(2rem + env(safe-area-inset-bottom));
+  max-width: 32rem;
   margin: 0 auto;
-  padding: 2.5rem 1.25rem;
 }
 
-.badge {
-  display: inline-block;
-  padding: 0.15rem 0.55rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--accent);
+.screen--center {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100vh;
+  text-align: center;
+}
+
+.page {
+  padding: 1rem 1rem 1.5rem;
+  max-width: 32rem;
+  margin: 0 auto;
+}
+
+/* --- type ----------------------------------------------------------------- */
+
+.brand {
+  display: inline-grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 1rem;
+  border-radius: 16px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.brand--small {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  border-radius: 8px;
   font-size: 0.75rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-h1 {
-  margin: 1rem 0 0;
-  font-size: 2rem;
+.title {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
   letter-spacing: -0.02em;
 }
 
 .lede {
-  margin: 1rem 0 0;
+  margin: 0 0 1.25rem;
   color: var(--muted);
 }
 
-.port {
-  margin: 2rem 0 0;
+.hint {
+  margin: 0;
   color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+}
+
+.error {
+  margin: 0;
+  color: #fca5a5;
   font-size: 0.875rem;
+}
+
+.state {
+  padding: 2.5rem 1.25rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.state--error {
+  color: #fca5a5;
+}
+
+.banner {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--warn);
+  font-size: 0.8125rem;
+}
+
+/* --- forms ---------------------------------------------------------------- */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  text-align: left;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.label {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.input {
+  min-height: var(--touch);
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  /* 16px minimum stops iOS Safari zooming the viewport on focus. */
+  font-size: 16px;
+  width: 100%;
+}
+
+.button {
+  min-height: var(--touch);
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.button--primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button--ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--fg);
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: var(--touch);
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.choice--selected {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+.choice input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+}
+
+/* --- games ---------------------------------------------------------------- */
+
+.section {
+  margin-bottom: 1.5rem;
+}
+
+.section__title {
+  margin: 0 0 0.6rem;
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.card__head {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.card__foot {
+  margin: 0.6rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.card__foot--cta {
+  color: var(--accent);
+}
+
+.chip {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chip--live {
+  background: rgba(248, 113, 113, 0.16);
+  color: var(--live);
+}
+
+.team {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.2rem 0;
+}
+
+.team__logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: var(--surface-2);
+  flex: none;
+}
+
+.team__logo--placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.team__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team__score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.score-line {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- tables --------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+}
+
+.tab {
+  flex: 1;
+  min-height: var(--touch);
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.tab--active {
+  border-color: var(--accent);
+  background: var(--surface-2);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.table th {
+  text-align: left;
+  padding: 0.5rem 0.4rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.table td {
+  padding: 0.65rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.row--me {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.row--void {
+  color: var(--muted);
+}
+
+.you {
+  color: var(--accent);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.matchup {
+  display: inline-block;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.total {
+  margin: 0 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* --- modals --------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(3, 6, 12, 0.72);
+  padding: 1rem;
+}
+
+.modal {
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom));
+  border: 1px solid var(--line);
+  border-radius: 18px 18px 12px 12px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.modal--confirm {
+  text-align: center;
+}
+
+.tick {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 1.6rem;
+  font-weight: 800;
+}
+
+.pick-summary {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+@media (min-width: 480px) {
+  .modal-backdrop {
+    align-items: center;
+  }
+
+  .modal {
+    border-radius: 16px;
+  }
+}
+
+/* --- bottom navigation ---------------------------------------------------- */
+
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.bottom-nav__item {
+  flex: 1;
+  min-height: var(--nav-height);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.bottom-nav__item--active {
+  color: var(--accent);
+}
+
+.bottom-nav__glyph {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.bottom-nav__label {
+  font-size: 0.6875rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }

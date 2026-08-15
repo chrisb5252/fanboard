@@ -8,7 +8,7 @@ import {
   validatePredictedWinner,
   validateVenueId,
 } from '../../../../../lib/validators';
-import { submitPick } from '../../../../../services/picks';
+import { listMyPicks, submitPick } from '../../../../../services/picks';
 
 /** Never prerender or cache: authenticated, and it writes. */
 export const dynamic = 'force-dynamic';
@@ -29,6 +29,36 @@ const requireSession = sessionMiddleware();
  * writes the pick, so a client cannot win by lying about the time or by racing
  * the lock.
  */
+/**
+ * The player's own picks, newest first.
+ *
+ * Session-authenticated and scoped to the caller's own player id — a patron can
+ * see what they predicted, never what anyone else did. The admin inspector is
+ * the venue-wide view and needs an API key.
+ */
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ venueId: string }> },
+): Promise<NextResponse> {
+  try {
+    const { venueId: rawVenueId } = await params;
+    const venueId = validateVenueId(rawVenueId);
+
+    const session = await requireSession(request);
+    assertVenueScope(session, venueId);
+
+    const picks = await listMyPicks(venueId, session.playerSessionId);
+
+    return NextResponse.json(picks, {
+      status: 200,
+      headers: { 'cache-control': 'no-store' },
+    });
+  } catch (error) {
+    const { status, body } = toErrorBody(error, log);
+    return NextResponse.json(body, { status });
+  }
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ venueId: string }> },
