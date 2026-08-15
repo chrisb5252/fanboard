@@ -44,3 +44,14 @@ export default defineConfig({
     sourcemap: true,
   },
 });
+
+export default {
+  server: {
+    allowedHosts: [
+      'fanboardmobile-web-production.up.railway.app',
+      'localhost',
+      '127.0.0.1'
+    ]
+  },
+  // ... rest of config
+}
