@@ -240,6 +240,17 @@ one in the URL. Without it, changing the venue id in the path would be enough.
 
 ### Rate limiting
 
+Full reference: **[packages/backend/RATE_LIMITING.md](packages/backend/RATE_LIMITING.md)**.
+Deployment requirements: **[packages/backend/DEPLOYMENT.md](packages/backend/DEPLOYMENT.md)**.
+
+Two settings decide whether this works in your environment, and both are easy to
+get wrong:
+
+- **`TRUSTED_PROXY_HOPS`** must match your proxy chain. Too high is a *bypass*;
+  too low but non-zero makes every client share one bucket.
+- **Redis availability is a security control.** If Redis is unreachable both
+  limits fail open — logged, but unthrottled.
+
 `POST /players` is the only unauthenticated write in the system. It carries two
 independent limits, both per hour:
 
@@ -278,7 +289,23 @@ the event is logged at error level. That is availability over security, and the
 cost is real — an attacker who can knock Redis over also removes the rate limit.
 It is the right default here because the alternative is that a Redis blip stops
 every patron in every venue from joining. **Redis availability is now a security
-control and should be alerted on.**
+control and should be alerted on.** Alert on the exact lower-case log strings
+listed in RATE_LIMITING.md; a search for `Rate limit check failed` will not match.
+
+Note the limiter has no command timeout: fail-open covers a Redis that *errors*,
+not one that *hangs*. See the known gap in DEPLOYMENT.md.
+
+### What is not rate-limited
+
+`POST /picks` is **session-limited, not rate-limited**. It requires a valid
+session cookie, and `UNIQUE (game_id, player_session_id)` caps a player at one
+row per game, updated in place — so the row ceiling is players × games, not
+requests. A valid session can still call it as fast as it likes, and each call
+costs a database round trip.
+
+The read endpoints (`/leaderboard`, `/display`) are Redis-cached and read-only.
+Everything under `/api/admin/*` and `/api/devices/*` is authenticated — access
+control, not rate limiting.
 
 ### Admin surfaces
 
