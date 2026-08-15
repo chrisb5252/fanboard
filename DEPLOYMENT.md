@@ -262,23 +262,35 @@ Do not run `vite` or `vite preview` in production. Both are development servers
 — unminified, source-mapped, not written to face the public — and the only
 reason a Node process was ever there is the `/api` and `/ws` proxy.
 
-Build each frontend into a Caddy image instead. Caddy serves the static bundle
-*and* proxies `/api` and `/ws` to the backend, so the browser still sees one
-origin:
+Serve them from Caddy instead. Caddy serves the static bundle *and* proxies
+`/api` and `/ws` to the backend, so the browser still sees one origin.
+
+**One image holds all three apps**; each service picks one at run time. There
+are no build arguments, so nothing depends on whether the platform forwards
+variables into the build:
 
 ```bash
-docker build -f deploy/frontend.Dockerfile --build-arg PACKAGE=mobile-web -t fanboard-mobile .
-docker build -f deploy/frontend.Dockerfile --build-arg PACKAGE=fire-tv    -t fanboard-tv .
-docker build -f deploy/frontend.Dockerfile --build-arg PACKAGE=admin-web  -t fanboard-admin .
+docker build -f deploy/frontend.Dockerfile -t fanboard-frontend .
 ```
 
-Each frontend service needs one variable:
+Every frontend service gets two variables:
 
 ```bash
+APP=mobile-web            # or fire-tv, or admin-web
 BACKEND_ORIGIN=http://<backend-service>.railway.internal:3000
 ```
 
-Railway sets `PORT` itself; Caddy reads it.
+Railway sets `PORT` itself; Caddy reads it. The container refuses to start if
+`APP` is missing or misspelt, or if `BACKEND_ORIGIN` is unset — both failures
+are otherwise quiet, showing up as either a 404 on every page or an app that
+loads perfectly and fails every API call.
+
+Only the named app is served. The other two are present in the image but sit
+outside Caddy's root, so their bundles are not reachable.
+
+The trade-off is that each service builds all three apps, so a type error in
+one fails every frontend's deploy. `npm run build` already type-checks all
+three together, so a broken app is caught before any deploy reaches Railway.
 
 Same-origin is the reason for the proxy rather than pointing the clients at the
 backend domain: the patron's session cookie is httpOnly and `SameSite=Lax`, so

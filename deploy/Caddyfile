@@ -1,5 +1,10 @@
-# Serves a built Vite app and proxies the API and realtime endpoints to the
-# backend, so the browser sees ONE origin.
+# Serves one of the built Vite apps and proxies the API and realtime endpoints
+# to the backend, so the browser sees ONE origin.
+#
+# APP selects which app to serve (mobile-web | fire-tv | admin-web). The image
+# contains all three; the same image is deployed once per service with a
+# different APP. frontend-entrypoint.sh refuses to start if it is unset or does
+# not name a built app, so a typo fails loudly instead of 404ing everything.
 #
 # Same-origin is not cosmetic here. The patron's session cookie is httpOnly and
 # SameSite=Lax: it rides the WebSocket handshake only when the socket shares the
@@ -48,12 +53,12 @@
 	# expected -- which reads as a bundler fault and sends you looking in the
 	# wrong place. A missing asset should 404 and say so.
 	handle /assets/* {
-		root * /srv
+		root * /srv/{$APP}
 		file_server
 	}
 
 	handle {
-		root * /srv
+		root * /srv/{$APP}
 		# SPA fallback, and it is load-bearing rather than boilerplate: the QR
 		# code on the TV points at /v/<venueId>, which the app reads from the
 		# pathname. There is no router and no such file on disk, so without this
