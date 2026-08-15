@@ -26,4 +26,17 @@ export async function register(): Promise<void> {
   // out of any bundle that is not the Node server.
   const { startWorkers } = await import('./lib/worker-scheduler');
   startWorkers();
+
+  /*
+   * The realtime listener runs here, in the same process as the API, on its own
+   * port. Next's App Router does not hand out its HTTP server, so there is no
+   * way to add a /ws upgrade handler to the listener `next start` owns without
+   * replacing it with a custom server — which cannot import TypeScript modules
+   * like these without a second build step. Own port, same process, /ws path.
+   * Put a reverse proxy in front and clients see one origin.
+   */
+  if (process.env['WS_ENABLED'] !== 'false') {
+    const { startWebSocketServer } = await import('./lib/websocket');
+    startWebSocketServer();
+  }
 }

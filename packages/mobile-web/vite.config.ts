@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 
 const PORT = 3002;
 const API_TARGET = process.env['VITE_API_PROXY_TARGET'] ?? 'http://localhost:3000';
+const WS_TARGET = process.env['VITE_WS_PROXY_TARGET'] ?? 'ws://localhost:3100';
 
 export default defineConfig({
   plugins: [react()],
@@ -25,6 +26,9 @@ export default defineConfig({
         target: API_TARGET,
         changeOrigin: true,
       },
+      // The realtime listener runs on its own port in the same backend
+      // process; the proxy is what makes it same-origin to the browser.
+      '/ws': { target: WS_TARGET, ws: true, changeOrigin: true },
     },
   },
   preview: {
@@ -32,6 +36,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': { target: API_TARGET, changeOrigin: true },
+      '/ws': { target: WS_TARGET, ws: true, changeOrigin: true },
     },
   },
   build: {

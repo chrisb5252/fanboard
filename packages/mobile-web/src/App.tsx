@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { fetchMyPicks, type Game, type MyPick, type PredictedWinner } from './lib/api';
 import { clearSession, loadSession, saveSession, venueIdFromLocation } from './lib/session';
 import { usePolling } from './lib/usePolling';
+import { useRealtime } from './lib/realtime';
 import { BottomNav, type TabId } from './components/BottomNav';
 import { NicknameModal } from './components/NicknameModal';
 import { PickConfirmation } from './components/PickConfirmation';
@@ -45,6 +46,8 @@ export function App() {
     null,
   );
   const [optimistic, setOptimistic] = useState<Map<string, PredictedWinner>>(new Map());
+  const [lockedGames, setLockedGames] = useState<Set<string>>(new Set());
+  const [realtimeNonce, setRealtimeNonce] = useState(0);
 
   const joined = venueId !== null && player !== null;
 
@@ -108,6 +111,35 @@ export function App() {
     return [...fromServer, ...pending];
   }, [picksState.data, optimistic]);
 
+  /**
+   * Realtime events are hints, not state.
+   *
+   * Each one bumps a nonce that changes the fetchers' identity, so the polling
+   * hooks reload from the API rather than trusting a payload that arrived over
+   * a socket. The one exception is game_locked, which is applied immediately —
+   * a patron tapping a game that just kicked off should be told before they
+   * pick, not after the server rejects them.
+   */
+  useRealtime({
+    enabled: joined,
+    onReconnect: () => {
+      // Everything reloads on connect, so anything missed while away is moot.
+      setRealtimeNonce((value) => value + 1);
+      picksState.refresh();
+    },
+    onEvent: (message) => {
+      if (message.type === 'game_locked') {
+        setLockedGames((previous) => new Set(previous).add(message.gameId));
+        setRealtimeNonce((value) => value + 1);
+        return;
+      }
+      if (message.type === 'games_graded' || message.type === 'leaderboard_updated') {
+        setRealtimeNonce((value) => value + 1);
+        picksState.refresh();
+      }
+    },
+  });
+
   const handleSubmitted = useCallback(
     (game: Game, winner: PredictedWinner) => {
       setOptimistic((previous) => new Map(previous).set(game.id, winner));
@@ -154,6 +186,8 @@ export function App() {
           <GamesList
             venueId={venueId}
             picks={picks}
+            refreshNonce={realtimeNonce}
+            lockedGames={lockedGames}
             onSelectGame={setOpenGame}
             onSessionExpired={endSession}
           />

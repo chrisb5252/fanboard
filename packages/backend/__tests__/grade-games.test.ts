@@ -111,6 +111,10 @@ function deps(overrides: Partial<GradeGamesDeps>): Partial<GradeGamesDeps> {
     logger: silent,
     invalidateLeaderboards: vi.fn(async () => undefined),
     notify: vi.fn(async () => undefined),
+    // Stubbed so these tests never open a real Redis client. Doing so would
+    // resolve and memoise the environment, pinning DATABASE_URL from
+    // `.env.local` before the integration block sets its own.
+    broadcastGraded: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -347,6 +351,7 @@ describe('gradeGamesOnce', () => {
 
     await gradeGamesOnce({
       logger: silent,
+      broadcastGraded: async () => undefined,
       provider: new StubProvider([
         normalized({ externalId: 'evt-1' }),
         normalized({ externalId: 'evt-2' }),
@@ -369,6 +374,7 @@ describe('gradeGamesOnce', () => {
     const invalidateLeaderboards = vi.fn(async () => undefined);
     await gradeGamesOnce({
       logger: silent,
+      broadcastGraded: async () => undefined,
       provider: new StubProvider([normalized({ status: 'live', winner: null })]),
       listCandidates: async () => [candidate()],
       withTransaction: fakeTransactor().withTransaction,
@@ -397,6 +403,7 @@ describe('gradeGamesOnce', () => {
     const { withTransaction } = fakeTransactor({ picksGraded: 3 });
     const outcome = await gradeGamesOnce({
       logger: silent,
+      broadcastGraded: async () => undefined,
       provider: new StubProvider([normalized()]),
       listCandidates: async () => [candidate()],
       withTransaction,
@@ -473,6 +480,7 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('grade-games against real Postg
   function run(games: NormalizedGame[], candidates: CandidateGame[]) {
     return gradeGamesOnce({
       logger: silent,
+      broadcastGraded: async () => undefined,
       provider: new StubProvider(games),
       listCandidates: async () => candidates,
       withTransaction: db.withTransaction,
@@ -597,6 +605,7 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('grade-games against real Postg
     // and nothing in the transaction lands.
     const outcome = await gradeGamesOnce({
       logger: silent,
+      broadcastGraded: async () => undefined,
       provider: new StubProvider([
         normalized({ externalId: 'g-6', winner: 'nonsense' as NormalizedGame['winner'] }),
       ]),

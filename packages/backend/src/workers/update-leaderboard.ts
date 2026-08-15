@@ -7,6 +7,7 @@ import {
   type LeaderboardEntry,
   type LeaderboardPeriod,
 } from '../lib/leaderboard';
+import { broadcastLeaderboard } from '../lib/leaderboard-broadcaster';
 import { logger as rootLogger, type Logger } from '../lib/logger';
 import { set as redisSet } from '../lib/redis';
 import type { UUID } from '../lib/validators';
@@ -28,6 +29,17 @@ export interface UpdateLeaderboardDeps {
   listVenueIds: () => Promise<UUID[]>;
   computeLeaderboard: (venueId: UUID, period: LeaderboardPeriod) => Promise<LeaderboardEntry[]>;
   cacheSet: (key: string, value: string, ttlSeconds?: number) => Promise<void>;
+  /**
+   * Injectable like every other dependency here, and for a concrete reason: a
+   * hard-wired broadcast reaches Redis, which resolves the environment, which
+   * memoises it. A unit test that never intended to touch infrastructure then
+   * pins the wrong DATABASE_URL for everything that runs after it.
+   */
+  broadcast: (
+    venueId: UUID,
+    period: LeaderboardPeriod,
+    standings: readonly LeaderboardEntry[],
+  ) => Promise<void>;
   logger: Logger;
 }
 
@@ -37,6 +49,7 @@ function resolveDeps(overrides: Partial<UpdateLeaderboardDeps>): UpdateLeaderboa
     computeLeaderboard:
       overrides.computeLeaderboard ?? ((venueId, period) => defaultCompute(venueId, period)),
     cacheSet: overrides.cacheSet ?? redisSet,
+    broadcast: overrides.broadcast ?? broadcastLeaderboard,
     logger: overrides.logger ?? rootLogger.child({ worker: UPDATE_LEADERBOARD_WORKER_NAME }),
   };
 }
@@ -80,6 +93,10 @@ export async function updateLeaderboardsOnce(
           const standings = await deps.computeLeaderboard(venueId, period);
           leaderboards += 1;
           entries += standings.length;
+
+          // Pushed so a wall of TVs updates together instead of staggering
+          // across each client's own poll window.
+          await deps.broadcast(venueId, period, standings);
 
           try {
             await deps.cacheSet(

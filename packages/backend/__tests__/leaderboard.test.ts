@@ -16,6 +16,13 @@ import type * as LeaderboardNamespace from '../src/lib/leaderboard';
 import type * as PlayersNamespace from '../src/services/players';
 
 const silent = createLogger({ level: 'silent' });
+
+/**
+ * Stubs the realtime fan-out. Without it these tests open a real Redis client,
+ * which resolves and memoises the environment — pinning DATABASE_URL from
+ * `.env.local` before the integration block below gets to set its own.
+ */
+const noBroadcast = async (): Promise<void> => undefined;
 const VENUE_A = trustedUuid('11111111-1111-1111-1111-111111111111');
 const VENUE_B = trustedUuid('22222222-2222-2222-2222-222222222222');
 
@@ -70,6 +77,7 @@ describe('updateLeaderboardsOnce', () => {
   it('computes every period for every venue', async () => {
     const computeLeaderboard = vi.fn(async () => []);
     const outcome = await updateLeaderboardsOnce({
+      broadcast: noBroadcast,
       logger: silent,
       listVenueIds: async () => [VENUE_A, VENUE_B],
       computeLeaderboard,
@@ -84,6 +92,7 @@ describe('updateLeaderboardsOnce', () => {
   it('warms the cache with a 60 second TTL', async () => {
     const cacheSet = vi.fn(async () => undefined);
     await updateLeaderboardsOnce({
+      broadcast: noBroadcast,
       logger: silent,
       listVenueIds: async () => [VENUE_A],
       computeLeaderboard: async () => [
@@ -102,6 +111,7 @@ describe('updateLeaderboardsOnce', () => {
   it('keeps going when one venue fails', async () => {
     let call = 0;
     const outcome = await updateLeaderboardsOnce({
+      broadcast: noBroadcast,
       logger: silent,
       listVenueIds: async () => [VENUE_A, VENUE_B],
       computeLeaderboard: async () => {
@@ -120,6 +130,7 @@ describe('updateLeaderboardsOnce', () => {
 
   it('still stores the snapshot when the cache write fails', async () => {
     const outcome = await updateLeaderboardsOnce({
+      broadcast: noBroadcast,
       logger: silent,
       listVenueIds: async () => [VENUE_A],
       computeLeaderboard: async () => [],
@@ -134,6 +145,7 @@ describe('updateLeaderboardsOnce', () => {
 
   it('never rejects when the venue list fails', async () => {
     const outcome = await updateLeaderboardsOnce({
+      broadcast: noBroadcast,
       logger: silent,
       listVenueIds: async () => {
         throw new Error('pool exhausted');
@@ -405,6 +417,7 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('leaderboard against real Postg
 
     const cache = new Map<string, string>();
     const outcome = await updateLeaderboardsOnce({
+      broadcast: noBroadcast,
       logger: silent,
       listVenueIds: async () => [venueId, otherVenueId],
       computeLeaderboard: (venue, period) => lb.computeLeaderboard(venue, period, { db: db.sql }),

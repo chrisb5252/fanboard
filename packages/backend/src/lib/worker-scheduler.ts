@@ -1,11 +1,17 @@
 import { closePool } from './db';
 import { logger as rootLogger, type Logger } from './logger';
 import { closeRedis } from './redis';
+import { stopWebSocketServer } from './websocket';
 import {
   GRADE_GAMES_INTERVAL_MS,
   GRADE_GAMES_WORKER_NAME,
   gradeGamesOnce,
 } from '../workers/grade-games';
+import {
+  LOCK_GAMES_INTERVAL_MS,
+  LOCK_GAMES_WORKER_NAME,
+  lockGamesOnce,
+} from '../workers/lock-games';
 import {
   POLL_GAMES_INTERVAL_MS,
   POLL_GAMES_WORKER_NAME,
@@ -117,6 +123,12 @@ function defaultWorkers(): WorkerDefinition[] {
         }
         return { graded };
       },
+    },
+    {
+      name: LOCK_GAMES_WORKER_NAME,
+      intervalMs: LOCK_GAMES_INTERVAL_MS,
+      runImmediately: true,
+      run: () => lockGamesOnce(),
     },
     {
       name: UPDATE_LEADERBOARD_WORKER_NAME,
@@ -332,6 +344,9 @@ export async function stopWorkers(
 }
 
 async function closeConnections(log: Logger): Promise<void> {
+  // Close sockets before the pool: a client mid-request would otherwise fail
+  // against a dead pool rather than being told the server is going away.
+  await stopWebSocketServer();
   const results = await Promise.allSettled([closePool(), closeRedis()]);
   for (const result of results) {
     if (result.status === 'rejected') {

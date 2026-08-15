@@ -37,14 +37,29 @@ export function groupGames(games: readonly Game[]): Section[] {
 export interface GamesListProps {
   venueId: string;
   picks: MyPick[];
+  /** Bumped by a realtime event to force a reload. */
+  refreshNonce?: number;
+  /** Games a realtime event closed since the last fetch. */
+  lockedGames?: Set<string>;
   onSelectGame: (game: Game) => void;
   onSessionExpired: () => void;
 }
 
-export function GamesList({ venueId, picks, onSelectGame, onSessionExpired }: GamesListProps) {
+export function GamesList({
+  venueId,
+  picks,
+  refreshNonce = 0,
+  lockedGames,
+  onSelectGame,
+  onSessionExpired,
+}: GamesListProps) {
+  // refreshNonce is in the dependency list on purpose: usePolling refetches
+  // when the fetcher identity changes, so bumping it is how a realtime event
+  // pulls fresh data without a second code path.
   const fetcher = useCallback(
     (signal: AbortSignal) => fetchGames(venueId, signal),
-    [venueId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [venueId, refreshNonce],
   );
 
   const { data, error, loading } = usePolling<Game[]>(fetcher, REFRESH_MS, {
@@ -63,7 +78,21 @@ export function GamesList({ venueId, picks, onSelectGame, onSessionExpired }: Ga
     return map;
   }, [picks]);
 
-  const sections = useMemo(() => groupGames(data ?? []), [data]);
+  // A game the socket says is locked is treated as live immediately, rather
+  // than waiting for the next fetch to agree.
+  const games = useMemo(() => {
+    const fetched = data ?? [];
+    if (lockedGames === undefined || lockedGames.size === 0) {
+      return fetched;
+    }
+    return fetched.map((game) =>
+      game.status === 'scheduled' && lockedGames.has(game.id)
+        ? { ...game, status: 'live' as const }
+        : game,
+    );
+  }, [data, lockedGames]);
+
+  const sections = useMemo(() => groupGames(games), [games]);
 
   if (loading) {
     return <p className="state" role="status">Loading tonight&rsquo;s games…</p>;

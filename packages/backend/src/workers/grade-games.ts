@@ -3,6 +3,7 @@ import { gradingChannel, leaderboardKey } from '../lib/cache-keys';
 import type { SqlExecutor } from '../lib/db';
 import { withTransaction as defaultWithTransaction, query } from '../lib/db';
 import { getEnv } from '../lib/env';
+import { broadcastGamesGraded } from '../lib/leaderboard-broadcaster';
 import { LEADERBOARD_PERIODS, PERIOD_TO_SNAPSHOT } from '../lib/leaderboard';
 import { logger as rootLogger, type Logger } from '../lib/logger';
 import { del as redisDel, publish as redisPublish } from '../lib/redis';
@@ -41,6 +42,8 @@ export interface GradeGamesDeps {
   withTransaction: <T>(work: (tx: SqlExecutor) => Promise<T>) => Promise<T>;
   invalidateLeaderboards: (venueId: UUID) => Promise<void>;
   notify: (venueId: UUID, payload: string) => Promise<void>;
+  /** Injectable for the same reason as every other I/O dependency here. */
+  broadcastGraded: (venueId: UUID, gameIds: readonly string[]) => Promise<void>;
   logger: Logger;
 }
 
@@ -153,8 +156,12 @@ function resolveDeps(overrides: Partial<GradeGamesDeps>): GradeGamesDeps {
     notify:
       overrides.notify ??
       (async (venueId, payload) => {
+        // Two publishes on purpose. The venue channel predates the realtime
+        // layer and stays for anything already listening to it; the realtime
+        // channel is what the WebSocket fan-out subscribes to.
         await redisPublish(gradingChannel(venueId), payload);
       }),
+    broadcastGraded: overrides.broadcastGraded ?? broadcastGamesGraded,
     logger: overrides.logger ?? rootLogger.child({ worker: GRADE_GAMES_WORKER_NAME }),
   };
 }
@@ -233,6 +240,7 @@ export async function gradeGamesOnce(
   let skipped = 0;
   let errors = 0;
   const touchedVenues = new Set<UUID>();
+  const gradedGameIds = new Map<UUID, string[]>();
 
   try {
     const pending = await deps.listCandidates();
@@ -279,6 +287,10 @@ export async function gradeGamesOnce(
           picksGraded += graded;
         }
         touchedVenues.add(candidate.venueId);
+        gradedGameIds.set(candidate.venueId, [
+          ...(gradedGameIds.get(candidate.venueId) ?? []),
+          candidate.id,
+        ]);
 
         log.info('game settled', {
           gameId: candidate.id,
@@ -301,6 +313,7 @@ export async function gradeGamesOnce(
     // cache or tell subscribers something happened.
     for (const venueId of touchedVenues) {
       await announce(venueId, deps, log);
+      await deps.broadcastGraded(venueId, gradedGameIds.get(venueId) ?? []);
     }
 
     log.info('grading run complete', {
