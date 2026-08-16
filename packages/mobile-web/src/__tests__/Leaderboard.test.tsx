@@ -43,6 +43,41 @@ describe('Leaderboard', () => {
     expect(within(rows[5]!).getByText('Fay')).toBeInTheDocument();
   });
 
+  it('refetches when a realtime event says the standings moved', async () => {
+    // The regression this pins: the nonce was wired to the games list and the
+    // picks list but not to this view, so `leaderboard_updated` refreshed
+    // everything except the leaderboard. A settled game reached every phone
+    // instantly and the board still waited out its 10 second timer.
+    fetchLeaderboard.mockResolvedValue(ROWS);
+    const view = render(<Leaderboard venueId={VENUE} nickname="Chris" refreshNonce={0} />);
+
+    await waitFor(() => {
+      expect(fetchLeaderboard).toHaveBeenCalledTimes(1);
+    });
+
+    view.rerender(<Leaderboard venueId={VENUE} nickname="Chris" refreshNonce={1} />);
+
+    await waitFor(() => {
+      expect(fetchLeaderboard).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('does not refetch when the nonce is unchanged', async () => {
+    // A re-render for any other reason must not trigger a fetch, or every
+    // phone in a busy venue hammers the endpoint on unrelated state changes.
+    fetchLeaderboard.mockResolvedValue(ROWS);
+    const view = render(<Leaderboard venueId={VENUE} nickname="Chris" refreshNonce={3} />);
+
+    await waitFor(() => {
+      expect(fetchLeaderboard).toHaveBeenCalledTimes(1);
+    });
+
+    view.rerender(<Leaderboard venueId={VENUE} nickname="Ada" refreshNonce={3} />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(fetchLeaderboard).toHaveBeenCalledTimes(1);
+  });
+
   it("highlights the current player's row", async () => {
     fetchLeaderboard.mockResolvedValue(ROWS);
     render(<Leaderboard venueId={VENUE} nickname="Chris" />);

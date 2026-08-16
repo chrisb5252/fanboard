@@ -195,7 +195,13 @@ export function App() {
         {tab === 'picks' && (
           <MyPicks picks={picks} loading={picksState.loading} error={picksState.error} />
         )}
-        {tab === 'leaderboard' && <Leaderboard venueId={venueId} nickname={player.nickname} />}
+        {tab === 'leaderboard' && (
+          <Leaderboard
+            venueId={venueId}
+            nickname={player.nickname}
+            refreshNonce={realtimeNonce}
+          />
+        )}
       </main>
 
       <BottomNav active={tab} onChange={setTab} />

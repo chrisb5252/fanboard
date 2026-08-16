@@ -15,14 +15,30 @@ export interface LeaderboardProps {
   venueId: string;
   /** Used to highlight the player's own row. */
   nickname: string;
+  /**
+   * Bumped when a realtime event says the standings moved.
+   *
+   * Without it this view only ever refreshed on its own 10 second timer — so
+   * the leaderboard, which is the thing the realtime layer exists to make
+   * live, was the one screen that ignored `leaderboard_updated`. A game would
+   * settle, every phone would be told immediately, and the board would sit
+   * unchanged for up to ten more seconds.
+   *
+   * The event is a hint to refetch, never data to apply: it names the venue,
+   * not the period this view happens to be showing.
+   */
+  refreshNonce?: number;
 }
 
-export function Leaderboard({ venueId, nickname }: LeaderboardProps) {
+export function Leaderboard({ venueId, nickname, refreshNonce = 0 }: LeaderboardProps) {
   const [period, setPeriod] = useState<LeaderboardPeriod>('today');
 
   const fetcher = useCallback(
     (signal: AbortSignal) => fetchLeaderboard(venueId, period, signal),
-    [venueId, period],
+    // refreshNonce is a dependency rather than a value the fetch reads: changing
+    // the identity is what makes usePolling refetch now instead of on its timer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [venueId, period, refreshNonce],
   );
 
   const { data, error, loading } = usePolling<LeaderboardRow[]>(fetcher, REFRESH_MS);
