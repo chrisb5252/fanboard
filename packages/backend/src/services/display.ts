@@ -81,13 +81,33 @@ function resolveDeps(deps?: Partial<DisplayServiceDeps>): DisplayServiceDeps {
  * Ordering puts live games first, then upcoming, then finished -- the client
  * groups into LIVE / COMING_UP / FINAL and this makes that a single pass.
  */
+/**
+ * Tonight's card, in the venue's own day.
+ *
+ * The window is computed in the venue's timezone, not the server's. Those are
+ * the same thing only for a venue that happens to sit in UTC; for an American
+ * bar the UTC day rolls over at 8pm local, so a 8:10pm kick-off counts as
+ * tomorrow and disappears from the list exactly when the room is watching it.
+ *
+ * The double `AT TIME ZONE` is the usual Postgres dance and reads oddly: the
+ * first converts the instant to a local wall clock so the day can be truncated,
+ * the second converts that local midnight back to an absolute instant so it can
+ * be compared against scheduled_at, which is timestamptz.
+ */
 const TODAY_GAMES_SQL = `
-SELECT id, league, home_team, away_team, home_score, away_score,
-       status, scheduled_at, home_logo_url, away_logo_url
-  FROM games
- WHERE venue_id = $1::uuid
-   AND scheduled_at >= date_trunc('day', NOW())
-   AND scheduled_at <  date_trunc('day', NOW()) + INTERVAL '1 day'
+WITH venue_day AS (
+  SELECT date_trunc('day', NOW() AT TIME ZONE v.timezone) AT TIME ZONE v.timezone AS starts_at,
+         v.timezone
+    FROM venues v
+   WHERE v.id = $1::uuid
+)
+SELECT g.id, g.league, g.home_team, g.away_team, g.home_score, g.away_score,
+       g.status, g.scheduled_at, g.home_logo_url, g.away_logo_url
+  FROM games g
+ CROSS JOIN venue_day d
+ WHERE g.venue_id = $1::uuid
+   AND g.scheduled_at >= d.starts_at
+   AND g.scheduled_at <  d.starts_at + INTERVAL '1 day'
  ORDER BY CASE status
             WHEN 'live'      THEN 0
             WHEN 'scheduled' THEN 1

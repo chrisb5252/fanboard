@@ -19,6 +19,50 @@ function resolveDeps(deps?: Partial<AdminServiceDeps>): AdminServiceDeps {
 export interface VenueConfig {
   venueId: UUID;
   enabledLeagues: League[];
+  /** IANA zone defining this venue's day. Defaults to UTC. */
+  timezone: string;
+}
+
+/**
+ * Sets the venue's timezone.
+ *
+ * Kept separate from the league config because it is set once when a venue is
+ * onboarded and then never touched, whereas leagues change with the seasons.
+ * Bundling them would mean every league edit had to resend a timezone, and a
+ * client that forgot would silently move the venue to UTC.
+ *
+ * The zone is validated by PostgreSQL's own database via the CHECK constraint,
+ * so an unknown name is a clean 400 rather than a query that throws on every
+ * subsequent read.
+ */
+export async function setVenueTimezone(
+  venueId: UUID,
+  timezone: string,
+  deps?: Partial<AdminServiceDeps>,
+): Promise<VenueConfig> {
+  const { db } = resolveDeps(deps);
+
+  try {
+    const result = await db.query<{ id: string }>(
+      `UPDATE venues SET timezone = $2::text, updated_at = NOW()
+        WHERE id = $1::uuid RETURNING id`,
+      [venueId, timezone],
+    );
+    if (result.rows[0] === undefined) {
+      throw ApiError.notFound('Venue not found');
+    }
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    // The CHECK rejects anything the server's zone database does not know.
+    throw ApiError.badRequest(
+      `Unknown timezone. Use an IANA name such as America/New_York.`,
+      { field: 'timezone' },
+    );
+  }
+
+  return getVenueConfig(venueId, deps);
 }
 
 /**
@@ -35,11 +79,11 @@ export async function setVenueConfig(
 ): Promise<VenueConfig> {
   const { db } = resolveDeps(deps);
 
-  const result = await db.query<{ id: string; enabled_leagues: unknown }>(
+  const result = await db.query<{ id: string; enabled_leagues: unknown; timezone: string }>(
     `UPDATE venues
         SET enabled_leagues = $2::jsonb
       WHERE id = $1::uuid
-      RETURNING id, enabled_leagues`,
+      RETURNING id, enabled_leagues, timezone`,
     [venueId, JSON.stringify(enabledLeagues)],
   );
 
@@ -51,6 +95,7 @@ export async function setVenueConfig(
   return {
     venueId: trustedUuid(row.id),
     enabledLeagues: (row.enabled_leagues as League[] | null) ?? [],
+    timezone: row.timezone,
   };
 }
 
@@ -95,8 +140,8 @@ export async function getVenueConfig(
   deps?: Partial<AdminServiceDeps>,
 ): Promise<VenueConfig> {
   const { db } = resolveDeps(deps);
-  const result = await db.query<{ id: string; enabled_leagues: unknown }>(
-    'SELECT id, enabled_leagues FROM venues WHERE id = $1::uuid',
+  const result = await db.query<{ id: string; enabled_leagues: unknown; timezone: string }>(
+    'SELECT id, enabled_leagues, timezone FROM venues WHERE id = $1::uuid',
     [venueId],
   );
 
@@ -108,6 +153,7 @@ export async function getVenueConfig(
   return {
     venueId: trustedUuid(row.id),
     enabledLeagues: (row.enabled_leagues as League[] | null) ?? [],
+    timezone: row.timezone,
   };
 }
 

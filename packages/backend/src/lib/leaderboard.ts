@@ -78,19 +78,25 @@ export function validatePeriod(value: unknown): LeaderboardPeriod {
  * The window boundary is computed with the database's clock via date_trunc, so
  * no client timestamp is trusted here either.
  *
- * Timezone caveat: date_trunc runs in the database's timezone (UTC in the
- * container), so "today" rolls over at 00:00 UTC rather than at the venue's
- * local midnight. A bar closing at 01:00 local will see its evening split
- * across two "today" boards. Fixing that properly needs a timezone column on
- * venues; it is called out in the README.
+ * Windows are computed in the venue's own timezone. They used to run in the
+ * database's, which is UTC: a bar closing at 01:00 local saw its evening split
+ * across two "today" boards, and an American venue rolled over at 8pm local —
+ * mid-service. venues.timezone now carries the zone and defaults to UTC, so a
+ * venue that never sets one behaves exactly as before.
  */
 const COMPUTE_AND_REPLACE_SQL = `
-WITH window_start AS (
+WITH venue_tz AS (
+  SELECT timezone FROM venues WHERE id = $1::uuid
+),
+window_start AS (
   SELECT CASE $2::text
-           WHEN 'today'     THEN date_trunc('day',  NOW())
-           WHEN 'this_week' THEN date_trunc('week', NOW())
+           WHEN 'today'
+             THEN date_trunc('day', NOW() AT TIME ZONE t.timezone) AT TIME ZONE t.timezone
+           WHEN 'this_week'
+             THEN date_trunc('week', NOW() AT TIME ZONE t.timezone) AT TIME ZONE t.timezone
            ELSE NULL
          END AS starts_at
+    FROM venue_tz t
 ),
 standings AS (
   SELECT p.player_session_id,

@@ -59,6 +59,28 @@ ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_enabled_leagues_is_array;
 ALTER TABLE venues ADD CONSTRAINT venues_enabled_leagues_is_array
   CHECK (jsonb_typeof(enabled_leagues) = 'array');
 
+-- The venue's own day.
+--
+-- "Today's games" and the daily leaderboard were computed in the database's
+-- timezone, which is UTC. For an American venue that rolls the day over at 8pm
+-- Eastern — in the middle of the busiest part of the night. A 8:10pm ET game is
+-- tomorrow to UTC, so it silently drops off the pickable list exactly when the
+-- room is watching it, and the next day's fixtures appear in its place.
+--
+-- Defaults to UTC so existing venues behave exactly as before until an operator
+-- sets their real zone.
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'UTC';
+
+-- Validated against the server's own zone database rather than a hand-kept
+-- list: an unknown name here would make every games query for the venue throw
+-- at read time, which is a much worse failure than a rejected write.
+ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_timezone_known;
+ALTER TABLE venues ADD CONSTRAINT venues_timezone_known
+  CHECK (now() AT TIME ZONE timezone IS NOT NULL);
+
+COMMENT ON COLUMN venues.timezone IS
+  'IANA zone (e.g. America/New_York) defining this venue''s day for the games list and the daily leaderboard. Defaults to UTC.';
+
 -- Suspension. An operator needs a way to stop a venue taking new picks without
 -- deleting anything: a disputed result, a display showing the wrong fixtures, a
 -- venue under investigation. Suspension blocks new picks only — games still
