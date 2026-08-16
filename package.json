@@ -5,7 +5,11 @@
   "description": "FanBoard — venue-hosted live sports prediction game (MVP infrastructure)",
   "license": "UNLICENSED",
   "workspaces": [
-    "packages/*"
+    "packages/backend",
+    "packages/web",
+    "packages/admin-web",
+    "packages/fire-tv",
+    "packages/mobile-web"
   ],
   "engines": {
     "node": ">=22.0.0",
@@ -25,7 +29,8 @@
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v && docker compose up -d",
     "infra:logs": "docker compose logs -f",
-    "infra:validate": "docker compose config --quiet"
+    "infra:validate": "docker compose config --quiet",
+    "dev:web": "npm run dev --workspace @fanboard/web"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^7.18.0",

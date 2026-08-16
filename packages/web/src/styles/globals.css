@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Dark is the only theme. This is used in a dim room, and `color-scheme` tells
+ * the browser to render form controls and scrollbars to match, which class-based
+ * dark mode alone does not do.
+ */
+:root {
+  color-scheme: dark;
+}
+
+/* Every celebration and transition collapses for anyone who asks for less
+   motion. Shortening is not enough — it still moves. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
