@@ -216,12 +216,79 @@ describe('PickForm', () => {
     );
 
     await userEvent.click(screen.getByLabelText('Bears'));
-    await userEvent.click(screen.getByRole('button', { name: 'Submit pick' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Lock it in' }));
 
     await waitFor(() => {
       expect(submitPick).toHaveBeenCalledWith(VENUE, GAME.id, 'home');
     });
     expect(onSubmitted).toHaveBeenCalledWith('home');
+  });
+
+  it('names each option as just the team, not the decoration around it', () => {
+    // The option is a card carrying a placeholder initial and a tick glyph.
+    // The accessible name has to stay the team, or a screen reader announces
+    // "B Bears ✓".
+    render(
+      <PickForm
+        venueId={VENUE}
+        game={GAME}
+        onSubmitted={vi.fn()}
+        onClose={vi.fn()}
+        onSessionExpired={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('radio', { name: 'Bears' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Packers' })).toBeInTheDocument();
+  });
+
+  it('says what a correct pick is worth', () => {
+    render(
+      <PickForm
+        venueId={VENUE}
+        game={GAME}
+        onSubmitted={vi.fn()}
+        onClose={vi.fn()}
+        onSessionExpired={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/\+10 if you call it/i)).toBeInTheDocument();
+  });
+
+  it('offers to change an existing pick rather than submit a new one', () => {
+    render(
+      <PickForm
+        venueId={VENUE}
+        game={GAME}
+        existingPick="home"
+        onSubmitted={vi.fn()}
+        onClose={vi.fn()}
+        onSessionExpired={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Change my pick' })).toBeInTheDocument();
+    // The reassurance appears only when there is something to change, and it
+    // never implies the player erred by changing their mind.
+    expect(screen.getByText(/changed your mind/i)).toBeInTheDocument();
+  });
+
+  it('drops the stakes and the clock once the game is closed', () => {
+    render(
+      <PickForm
+        venueId={VENUE}
+        game={{ ...GAME, status: 'live' }}
+        onSubmitted={vi.fn()}
+        onClose={vi.fn()}
+        onSessionExpired={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/picks are closed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/if you call it/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/locks in/i)).not.toBeInTheDocument();
+    // Encouraging even here: no scolding for arriving late.
+    expect(screen.getByText(/catch the next one/i)).toBeInTheDocument();
   });
 
   it('shows the locked message on 423', async () => {
@@ -238,7 +305,7 @@ describe('PickForm', () => {
     );
 
     await userEvent.click(screen.getByLabelText('Packers'));
-    await userEvent.click(screen.getByRole('button', { name: 'Submit pick' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Lock it in' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/picks are locked/i);
   });
@@ -258,7 +325,7 @@ describe('PickForm', () => {
     );
 
     await userEvent.click(screen.getByLabelText('Bears'));
-    await userEvent.click(screen.getByRole('button', { name: 'Submit pick' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Lock it in' }));
 
     await waitFor(() => {
       expect(onSessionExpired).toHaveBeenCalled();
@@ -276,7 +343,7 @@ describe('PickForm', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Submit pick' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Lock it in' })).toBeDisabled();
     expect(screen.getByText(/picks are closed/i)).toBeInTheDocument();
   });
 });

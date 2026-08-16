@@ -43,6 +43,12 @@ export function currentStreak(picks: readonly MyPick[]): number {
   return streak;
 }
 
+/**
+ * What one correct pick is worth. Mirrors POINTS_FOR_CORRECT_PICK in the
+ * backend's grade-games worker — the value the server actually writes.
+ */
+export const POINTS_FOR_CORRECT_PICK = 10;
+
 /** Three in a row is where a run starts feeling like one. */
 export const HOT_HAND_THRESHOLD = 3;
 

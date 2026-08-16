@@ -814,3 +814,129 @@ input {
   color: var(--fg);
   font-size: 0.875rem;
 }
+
+/* ---------------------------------------------------------------------------
+ * Pick sheet
+ * ------------------------------------------------------------------------- */
+
+.modal--sheet {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.pick-title {
+  margin: 0 0 0.15rem;
+  font-size: 1.375rem;
+  letter-spacing: -0.02em;
+}
+
+.pick-sub {
+  margin: 0 0 0.85rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+.pick-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.pick-meta__reward {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Amber, not red. The clock is information about time running out, not an
+   error, and red here would read as "you have done something wrong". */
+.pick-meta__clock {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.pick-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  border: 0;
+  padding: 0;
+  margin: 0 0 0.85rem;
+}
+
+/* The whole card is the target, well past the 44px minimum, because this is
+   the one tap the entire app exists for and it happens one-handed in a dim
+   room. */
+.pick-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 64px;
+  padding: 0.75rem 0.9rem;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.pick-option:active {
+  transform: scale(0.99);
+}
+
+.pick-option--selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The radio is visually hidden, so focus has to be drawn on the card or a
+   keyboard user cannot see where they are. */
+.pick-option:focus-within {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pick-option__logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: contain;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: 700;
+  flex: none;
+}
+
+.pick-option__team {
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.pick-option__tick {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.button--lock {
+  width: 100%;
+  margin-bottom: 0.5rem;
+  font-size: 1.0625rem;
+}
+
+.stats__heading {
+  margin: 0 0 0.6rem;
+  font-size: 1.375rem;
+  letter-spacing: -0.02em;
+}

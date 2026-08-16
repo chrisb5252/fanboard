@@ -33,6 +33,11 @@ export function StatsHeader({ nickname, picks, board }: StatsHeaderProps) {
 
   return (
     <section className="stats" aria-label="Your progress">
+      {/* "Pick Games", not "Available Markets". The h1 for this screen lives
+          here rather than in the shell, because this block is what a player
+          lands on. */}
+      <h1 className="stats__heading">Pick Games</h1>
+
       <div className="stats__row">
         <span className={`tier${hot ? ' tier--hot' : ''}`}>
           <span aria-hidden="true">{tier.emoji}</span> {tier.name}
