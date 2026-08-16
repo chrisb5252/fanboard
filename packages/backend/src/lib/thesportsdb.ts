@@ -198,14 +198,30 @@ export class TheSportsDBProvider extends SportsProvider {
     return url.split(`/json/${this.apiKey}/`).join('/json/***/');
   }
 
-  private buildUrl(date: string): string {
+  /**
+   * Takes the sport rather than reading the instance default.
+   *
+   * It used to read `this.sport`, which meant a per-call scope was accepted,
+   * threaded through, cached under its own key — and then silently ignored at
+   * the last step, so every request went out as the default sport. The symptom
+   * was five sports' worth of requests all returning soccer.
+   */
+  private buildUrl(date: string, sport: string): string {
     const key = encodeURIComponent(this.apiKey);
-    const query = new URLSearchParams({ d: date, s: this.sport });
+    const query = new URLSearchParams({ d: date, s: sport });
     return `${this.baseUrl}/${key}/eventsday.php?${query.toString()}`;
   }
 
-  private cacheKey(date: string): string {
-    return `sports:${this.name}:eventsday:${this.sport.toLowerCase()}:${date}`;
+  /**
+   * Scoped by sport as well as date.
+   *
+   * The endpoint answers per sport, so keying on date alone would let the first
+   * sport fetched for a day serve every other sport from cache — the NFL slate
+   * returned for a Basketball request. Harmless-looking and very hard to spot,
+   * since the data is real, just for the wrong sport.
+   */
+  private cacheKey(date: string, sport: string): string {
+    return `sports:${this.name}:eventsday:${sport.toLowerCase()}:${date}`;
   }
 
   async fetchGames(date: string, options?: FetchGamesOptions): Promise<NormalizedGame[]> {
@@ -216,19 +232,32 @@ export class TheSportsDBProvider extends SportsProvider {
       return [];
     }
 
-    const sport = options?.sport ?? this.sport;
-    const body = await this.loadResponseBody(date, sport);
-    if (body === null) {
-      return [];
+    // One request per sport scope. The endpoint answers for a single sport, so
+    // covering several means several calls merged — not one wider call.
+    const sports =
+      options?.sports !== undefined && options.sports.length > 0
+        ? options.sports
+        : [options?.sport ?? this.sport];
+
+    const merged = new Map<string, NormalizedGame>();
+    for (const sport of sports) {
+      const body = await this.loadResponseBody(date, sport);
+      if (body === null) {
+        // One scope failing must not lose the others: a 503 on Soccer should
+        // still leave the day's NFL slate ingested.
+        continue;
+      }
+      for (const game of this.normalizeBody(body, date)) {
+        merged.set(game.externalId, game);
+      }
     }
 
-    const games = this.normalizeBody(body, date);
-    return filterByLeagues(games, options?.leagues);
+    return filterByLeagues([...merged.values()], options?.leagues);
   }
 
   /** Returns the raw JSON body from cache or the network, or null on failure. */
   private async loadResponseBody(date: string, sport: string): Promise<string | null> {
-    const key = this.cacheKey(date);
+    const key = this.cacheKey(date, sport);
 
     if (this.cache !== undefined) {
       try {
@@ -261,7 +290,7 @@ export class TheSportsDBProvider extends SportsProvider {
 
   /** Performs the HTTP call. Returns null on any failure, never throws. */
   private async requestDay(date: string, sport: string): Promise<string | null> {
-    const url = this.buildUrl(date);
+    const url = this.buildUrl(date, sport);
     const safeUrl = this.redactUrl(url);
     const startedAt = Date.now();
 

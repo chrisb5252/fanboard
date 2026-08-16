@@ -47,6 +47,15 @@ export interface FetchGamesOptions {
   readonly leagues?: readonly string[];
   /** Provider-specific sport scope, e.g. "Soccer" for TheSportsDB. */
   readonly sport?: string;
+  /**
+   * Several sport scopes in one call.
+   *
+   * TheSportsDB's eventsday endpoint answers for exactly one sport, so a single
+   * scope means a poll can only ever see one of them. Covering NFL, NBA, MLB,
+   * NHL and the football leagues at once requires asking once per sport and
+   * merging, which is what this expresses. Takes precedence over `sport`.
+   */
+  readonly sports?: readonly string[];
 }
 
 /** Minimal cache contract so providers can be tested without Redis. */

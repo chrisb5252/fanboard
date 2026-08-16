@@ -57,7 +57,7 @@ describe('league whitelist', () => {
   });
 
   it('rejects anything outside the whitelist with 400', () => {
-    for (const bad of [['EPL'], ['NFL', 'CFL'], ['nfl'], [42], [null], ['']]) {
+    for (const bad of [['MLS'], ['NFL', 'CFL'], ['nfl'], [42], [null], ['']]) {
       const error = expectApiErrorSync(() => validateEnabledLeagues(bad));
       expect(error.status).toBe(400);
     }
@@ -70,8 +70,8 @@ describe('league whitelist', () => {
   });
 
   it('names what was rejected and what is allowed', () => {
-    const error = expectApiErrorSync(() => validateEnabledLeagues(['EPL']));
-    expect(error.message).toContain('EPL');
+    const error = expectApiErrorSync(() => validateEnabledLeagues(['MLS']));
+    expect(error.message).toContain('MLS');
     expect(error.details).toMatchObject({ allowed: [...LEAGUE_WHITELIST] });
   });
 
@@ -89,7 +89,10 @@ describe('league whitelist', () => {
 
   it('narrows correctly', () => {
     expect(isLeague('NFL')).toBe(true);
-    expect(isLeague('EPL')).toBe(false);
+    // EPL joined the whitelist when the poller learned to request more than
+    // one sport scope; MLS now stands in as something still outside it.
+    expect(isLeague('EPL')).toBe(true);
+    expect(isLeague('MLS')).toBe(false);
   });
 });
 

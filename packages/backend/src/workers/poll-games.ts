@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { SqlExecutor } from '../lib/db';
 import { withTransaction as defaultWithTransaction, query } from '../lib/db';
 import { getEnv } from '../lib/env';
+import { leagueMatchesFor, sportsForLeagues } from '../lib/leagues';
 import { logger as rootLogger, type Logger } from '../lib/logger';
 import { get as redisGet, set as redisSet } from '../lib/redis';
 import {
@@ -220,7 +221,15 @@ export async function pollGamesOnce(
 
     const games = dedupeByExternalId(
       await deps.provider.fetchGamesForRange(startDate, deps.daysAhead, {
-        leagues: deps.leagues,
+        // One request per sport scope, because TheSportsDB's day endpoint
+        // answers for a single sport at a time. Without this the poller only
+        // ever asked for its default scope — Soccer — and every other league
+        // looked as though it had no fixtures at all.
+        sports: sportsForLeagues(deps.leagues),
+        // The provider filters on the league name the API returns, which is
+        // not always the code a venue stores: 'EPL' is 'English Premier
+        // League' upstream, so passing the raw code would match nothing.
+        leagues: leagueMatchesFor(deps.leagues),
       }),
     );
     fetched = games.length;
