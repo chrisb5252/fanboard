@@ -67,11 +67,16 @@ const SUBMIT_PICK_SQL = `
 WITH open_game AS (
   SELECT g.id, g.venue_id
     FROM games g
+    JOIN venues v ON v.id = g.venue_id
    WHERE g.id = $2::uuid
      AND g.venue_id = $1::uuid
      AND g.cancelled = FALSE
      AND g.status = 'scheduled'
      AND COALESCE(g.locked_at, g.scheduled_at) > NOW()
+     -- Suspension is checked here rather than in a preceding SELECT for the
+     -- same reason the lock is: a separate check is a race, and the window is
+     -- exactly when an operator is suspending a venue mid-incident.
+     AND v.suspended_at IS NULL
 )
 INSERT INTO picks (venue_id, game_id, player_session_id, predicted_winner, submitted_at)
 SELECT open_game.venue_id, open_game.id, $3::uuid, $4::text, NOW()
@@ -91,8 +96,10 @@ SELECT g.id,
        g.status,
        g.cancelled,
        COALESCE(g.locked_at, g.scheduled_at)          AS lock_at,
-       COALESCE(g.locked_at, g.scheduled_at) <= NOW() AS time_locked
+       COALESCE(g.locked_at, g.scheduled_at) <= NOW() AS time_locked,
+       (v.suspended_at IS NOT NULL)                   AS venue_suspended
   FROM games g
+  JOIN venues v ON v.id = g.venue_id
  WHERE g.id = $2::uuid
    AND g.venue_id = $1::uuid
 `;
@@ -103,6 +110,7 @@ interface ExplainRow {
   cancelled: boolean;
   lock_at: Date | null;
   time_locked: boolean;
+  venue_suspended: boolean;
 }
 
 export async function submitPick(
@@ -183,6 +191,13 @@ async function buildRejection(
     // the response cannot be used to enumerate games across venues.
     log.info('pick rejected: game not found in this venue');
     return ApiError.notFound('Game not found');
+  }
+
+  if (game.venue_suspended) {
+    // 403, not 423: the game is fine, the venue is closed for business. An
+    // operator reading a 423 would go looking at kick-off times.
+    log.warn('pick rejected: venue is suspended');
+    return ApiError.forbidden('This venue is not accepting picks right now');
   }
 
   // Warm the fast path so the next attempt short-circuits before touching pg.

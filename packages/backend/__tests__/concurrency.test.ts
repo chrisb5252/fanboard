@@ -513,6 +513,93 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('concurrency and integrity', ()
   });
 
   // -------------------------------------------------------------------------
+  // 4b. Leaderboard snapshot under concurrent computation
+  // -------------------------------------------------------------------------
+
+  describe('snapshot materialisation under concurrency', () => {
+    /** Seeds `count` players with graded picks on one settled game. */
+    async function seedSettledBoard(venueId: UUID, label: string, count: number): Promise<void> {
+      const game = await seedGame(venueId, `${PREFIX}-${label}`, `NOW() - INTERVAL '2 hours'`);
+      const roster = await Promise.all(
+        Array.from({ length: count }, (_, i) =>
+          seedPlayer(venueId, `Snap${label}${String.fromCharCode(97 + i)}`),
+        ),
+      );
+      for (const [index, playerSessionId] of roster.entries()) {
+        await db.query(
+          `INSERT INTO picks (venue_id, game_id, player_session_id, predicted_winner)
+           VALUES ($1::uuid,$2::uuid,$3::uuid,$4::text)`,
+          [venueId, game, playerSessionId, index % 2 === 0 ? 'home' : 'away'],
+        );
+      }
+      await gradeOne(venueId, game, `${PREFIX}-${label}`, 'home');
+    }
+
+    it('holds one row per player when two instances materialise at once', async () => {
+      // Two instances both run update-leaderboard on a five minute cadence, and
+      // grading triggers an extra pass, so simultaneous materialisation of the
+      // same venue and period is ordinary rather than exotic.
+      await seedSettledBoard(venueA, 'x', 10);
+
+      await Promise.all([
+        leaderboard.computeLeaderboard(venueA, 'all_time', { db: db.sql }),
+        leaderboard.computeLeaderboard(venueA, 'all_time', { db: db.sql }),
+      ]);
+
+      const stored = await db.query<{ count: string; distinct: string }>(
+        `SELECT count(*)::text AS count,
+                count(DISTINCT player_session_id)::text AS distinct
+           FROM leaderboard_snapshot
+          WHERE venue_id = $1::uuid AND period = 'all_time'`,
+        [venueA],
+      );
+
+      // Duplicated rows would render every player twice on the TV.
+      expect(stored.rows[0]?.count).toBe('10');
+      expect(stored.rows[0]?.distinct).toBe('10');
+    }, 60_000);
+
+    it('leaves exactly one row per rank after concurrent materialisation', async () => {
+      await seedSettledBoard(venueA, 'y', 6);
+
+      await Promise.all([
+        leaderboard.computeLeaderboard(venueA, 'this_week', { db: db.sql }),
+        leaderboard.computeLeaderboard(venueA, 'this_week', { db: db.sql }),
+        leaderboard.computeLeaderboard(venueA, 'this_week', { db: db.sql }),
+      ]);
+
+      const ranks = await db.query<{ rank: number; n: string }>(
+        `SELECT rank, count(*)::text AS n
+           FROM leaderboard_snapshot
+          WHERE venue_id = $1::uuid AND period = 'weekly'
+          GROUP BY rank ORDER BY rank`,
+        [venueA],
+      );
+
+      expect(ranks.rows).toHaveLength(6);
+      for (const row of ranks.rows) {
+        expect(row.n).toBe('1');
+      }
+    }, 60_000);
+
+    it('serves a read that races materialisation without duplicates', async () => {
+      await seedSettledBoard(venueA, 'z', 8);
+      await leaderboard.computeLeaderboard(venueA, 'all_time', { db: db.sql });
+
+      const [, ...reads] = await Promise.all([
+        leaderboard.computeLeaderboard(venueA, 'all_time', { db: db.sql }),
+        leaderboard.readLeaderboardSnapshot(venueA, 'all_time', { db: db.sql }),
+        leaderboard.readLeaderboardSnapshot(venueA, 'all_time', { db: db.sql }),
+      ]);
+
+      for (const board of reads) {
+        const names = board.map((e) => e.nickname);
+        expect(new Set(names).size).toBe(names.length);
+      }
+    }, 60_000);
+  });
+
+  // -------------------------------------------------------------------------
   // 5. Venue isolation
   // -------------------------------------------------------------------------
 

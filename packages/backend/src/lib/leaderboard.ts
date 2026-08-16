@@ -1,5 +1,5 @@
 import type { SqlExecutor } from './db';
-import { sql as defaultSql } from './db';
+import { sql as defaultSql, withTransaction as defaultWithTransaction } from './db';
 import { ApiError } from './errors';
 import { trustedUuid, type UUID } from './validators';
 
@@ -36,6 +36,12 @@ export interface LeaderboardEntry {
 
 export interface LeaderboardDeps {
   db: SqlExecutor;
+  /**
+   * Used only by computeLeaderboard, which must hold a lock across two
+   * statements and therefore cannot run on a bare pool executor: `db.query`
+   * may hand each statement a different connection.
+   */
+  withTransaction: <T>(work: (tx: SqlExecutor) => Promise<T>) => Promise<T>;
 }
 
 export function isLeaderboardPeriod(value: unknown): value is LeaderboardPeriod {
@@ -158,18 +164,47 @@ export async function computeLeaderboard(
   period: LeaderboardPeriod,
   deps?: Partial<LeaderboardDeps>,
 ): Promise<LeaderboardEntry[]> {
-  const db = deps?.db ?? defaultSql;
+  const runInTransaction = deps?.withTransaction ?? defaultWithTransaction;
   const snapshotPeriod = PERIOD_TO_SNAPSHOT[period];
 
-  const result = await db.query<SnapshotRow>(COMPUTE_AND_REPLACE_SQL, [
-    venueId,
-    period,
-    snapshotPeriod,
-  ]);
+  /*
+   * The advisory lock serialises materialisation per venue and period, and it
+   * is not defensive programming — without it two instances duplicate the
+   * board, measured: ten players became twenty rows, every rank twice.
+   *
+   * The statement below wipes and rebuilds in one shot, which looks atomic and
+   * is, in isolation. Under READ COMMITTED it is not enough. Both transactions
+   * take their snapshot before either commits, so T2's DELETE cannot see the
+   * rows T1 is about to insert: it removes the *old* rows T1 already removed,
+   * then inserts a second full copy. Nothing conflicts, nothing errors, and the
+   * TV shows everybody twice.
+   *
+   * The lock has to be acquired before the DELETE, so it cannot live inside
+   * that statement — a CTE gives no ordering guarantee against the
+   * data-modifying arms. Hence a transaction with the lock as its own first
+   * statement, which also means `db` does not apply here: a pool executor may
+   * put the two statements on different connections and the lock would be
+   * released before the work ran.
+   *
+   * Contention is per venue and period and the rebuild takes milliseconds, so
+   * the second caller waits, re-runs, and produces the same rows. Correct and
+   * idempotent rather than merely serialised.
+   */
+  return runInTransaction(async (tx) => {
+    await tx.query('SELECT pg_advisory_xact_lock(hashtext($1::text)::bigint)', [
+      `fanboard:leaderboard:${venueId}:${snapshotPeriod}`,
+    ]);
 
-  // RETURNING follows insertion order, which follows `ranked`, but ordering is
-  // not contractual in SQL -- sort so callers can rely on it.
-  return result.rows.map(toEntry).sort((a, b) => a.rank - b.rank);
+    const result = await tx.query<SnapshotRow>(COMPUTE_AND_REPLACE_SQL, [
+      venueId,
+      period,
+      snapshotPeriod,
+    ]);
+
+    // RETURNING follows insertion order, which follows `ranked`, but ordering is
+    // not contractual in SQL -- sort so callers can rely on it.
+    return result.rows.map(toEntry).sort((a, b) => a.rank - b.rank);
+  });
 }
 
 const READ_SNAPSHOT_SQL = `

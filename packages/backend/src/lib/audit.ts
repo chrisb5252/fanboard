@@ -27,6 +27,10 @@ export const AUDIT_ACTIONS = {
   devicePaired: 'device.paired',
   apiKeyRotated: 'venue.api_key.rotated',
   apiKeyPreviousRevoked: 'venue.api_key.previous_revoked',
+  venueSuspended: 'venue.suspended',
+  venueResumed: 'venue.resumed',
+  pickVoided: 'pick.voided',
+  playerReconciled: 'player.reconciled',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

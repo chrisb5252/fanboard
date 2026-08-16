@@ -59,6 +59,23 @@ ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_enabled_leagues_is_array;
 ALTER TABLE venues ADD CONSTRAINT venues_enabled_leagues_is_array
   CHECK (jsonb_typeof(enabled_leagues) = 'array');
 
+-- Suspension. An operator needs a way to stop a venue taking new picks without
+-- deleting anything: a disputed result, a display showing the wrong fixtures, a
+-- venue under investigation. Suspension blocks new picks only — games still
+-- grade and leaderboards still settle, because abandoning picks already made
+-- would punish patrons for an operator's problem.
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ;
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS suspended_reason TEXT;
+
+ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_suspension_paired;
+ALTER TABLE venues ADD CONSTRAINT venues_suspension_paired
+  CHECK ((suspended_at IS NULL) = (suspended_reason IS NULL));
+
+COMMENT ON COLUMN venues.suspended_at IS
+  'Set while the venue is not accepting new picks. NULL means active.';
+COMMENT ON COLUMN venues.suspended_reason IS
+  'Why it was suspended. Surfaced to operators, never to patrons.';
+
 -- Key rotation. The previous key stays valid for a bounded grace window so a
 -- venue can roll its credential without an outage: rotating a single-column
 -- key breaks every running client the instant it is written, which is why

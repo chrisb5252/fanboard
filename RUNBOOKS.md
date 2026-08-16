@@ -287,6 +287,133 @@ superseded API key` — useful for telling whether the leak was exercised.
 
 ---
 
+## 7. Picks are stalled after a game finished
+
+**Symptom:** a game is over, the TV still shows it as pending, nobody's points moved.
+
+Grading waits **30 minutes** after kick-off before considering a game, and runs
+every 2 minutes. A game that finished 20 minutes ago is not late.
+
+```sql
+SELECT g.id, g.external_id, g.status, g.graded_at,
+       count(p.id) FILTER (WHERE p.graded_at IS NULL) AS ungraded_picks
+  FROM games g LEFT JOIN picks p ON p.game_id = g.id
+ WHERE g.venue_id = :venue_id AND g.scheduled_at < NOW() - INTERVAL '30 minutes'
+ GROUP BY g.id ORDER BY g.scheduled_at DESC LIMIT 20;
+```
+
+- `graded_at` set and `ungraded_picks` 0 → settled; the display is stale, see runbook 1.
+- `graded_at` NULL → the provider has not reported it final. Check runbook 2 step 4.
+- `graded_at` set but `ungraded_picks` > 0 → **this should be impossible**; game
+  settlement and pick scoring happen in one transaction. Escalate, and take a
+  backup before touching anything.
+
+There is **no manual grading endpoint**. If the provider never reports a game,
+it stays ungraded. See the gap noted at the end of this file.
+
+## 8. A player has the wrong points
+
+```bash
+curl -X POST -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+  -d '{"playerSessionId":"<uuid>"}' \
+  https://api.fanboard.com/api/admin/venues/$VENUE_ID/reconcile
+```
+
+Counts the player's picks directly and compares against the materialised board.
+The response is the diagnosis:
+
+- `mismatch: false` → the board is right; the phone or TV is showing a cached
+  view. Runbook 1.
+- `mismatch: true, repaired: true` → the board was stale and has been rebuilt.
+  Nothing further to do.
+- `mismatch: true, repaired: false` → **rebuilding did not fix it.** The
+  disagreement is not staleness. Escalate; do not keep retrying.
+
+To inspect a single pick, including whether it is ungraded, graded or voided:
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" \
+  https://api.fanboard.com/api/admin/venues/$VENUE_ID/picks/$PICK_ID
+```
+
+To remove a pick that should not have counted — it becomes neither a win nor a
+loss, and the board is rebuilt immediately:
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+  -d '{"reason":"duplicate fixture"}' \
+  https://api.fanboard.com/api/admin/venues/$VENUE_ID/picks/$PICK_ID
+```
+
+Voiding is idempotent and every action lands in the audit log.
+
+## 9. Taking a venue out of service
+
+For a disputed result, wrong fixtures on screen, or a venue under investigation:
+
+```bash
+curl -X POST -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+  -d '{"reason":"disputed result on Bears/Packers"}' \
+  https://api.fanboard.com/api/admin/venues/$VENUE_ID/suspend
+```
+
+**Suspension stops new picks only.** Games keep grading and leaderboards keep
+settling, deliberately: patrons whose picks are already in should not lose them
+because of an operator's problem. Patrons see a refusal to accept new picks;
+they are not told why.
+
+Lift it with `DELETE` on the same path. Check state with `GET`. Both are
+idempotent, and the suspension timestamp does not move when you re-suspend, so
+"how long has this venue been down?" stays answerable.
+
+## 10. Backup and restore
+
+**Take a backup** before going live, before any schema change, and after a busy
+night:
+
+```bash
+DATABASE_URL=postgresql://... ./packages/backend/scripts/backup.sh ./backups
+```
+
+The script fails loudly rather than leaving a zero-byte file, and verifies the
+dump afterwards — non-empty, ends with pg_dump's completion marker, contains
+every expected table.
+
+**Restore into a scratch database first.** Never restore straight over a live
+one to "see if it works":
+
+```bash
+createdb fanboard_restore
+psql "$SCRATCH_DATABASE_URL" < backups/fanboard-YYYYMMDD-HHMMSS.sql
+```
+
+Then check integrity before trusting it:
+
+```sql
+-- Orphaned picks. Expect 0.
+SELECT count(*) FROM picks p WHERE NOT EXISTS (SELECT 1 FROM games g WHERE g.id = p.game_id);
+
+-- Snapshot rows pointing at sessions that no longer exist. Expect 0.
+SELECT count(*) FROM leaderboard_snapshot s
+ WHERE s.player_session_id IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM player_sessions ps WHERE ps.id = s.player_session_id);
+
+-- Picks in an illegal state. Expect 0.
+SELECT count(*) FROM picks
+ WHERE (correct IS NULL) <> (points IS NULL)
+    OR (correct IS NOT NULL AND graded_at IS NULL);
+
+-- How much would be lost by restoring this backup.
+SELECT max(submitted_at) FROM picks;
+```
+
+Railway's own automated backups are the first line; this script is for the
+moments you want a known-good copy in your hand — immediately before a schema
+change or a busy Saturday.
+
+**A backup nobody has restored is a hypothesis.** Do the scratch restore at
+least once before going live.
+
 ## Escalation
 
 | Condition | Action |
