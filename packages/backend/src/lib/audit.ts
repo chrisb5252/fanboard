@@ -31,6 +31,7 @@ export const AUDIT_ACTIONS = {
   venueResumed: 'venue.resumed',
   pickVoided: 'pick.voided',
   playerReconciled: 'player.reconciled',
+  gameGradedManually: 'game.graded_manually',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

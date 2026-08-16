@@ -337,6 +337,129 @@ export async function reconcilePlayer(
 }
 
 // ---------------------------------------------------------------------------
+// Manual settlement
+// ---------------------------------------------------------------------------
+
+export interface ManualOutcome {
+  readonly status: 'final' | 'cancelled';
+  /** Required when final; absent when cancelled. */
+  readonly winner?: 'home' | 'away' | 'draw';
+  readonly homeScore?: number;
+  readonly awayScore?: number;
+}
+
+export interface ManualGradeResult {
+  readonly gameId: UUID;
+  readonly gamesGraded: number;
+  readonly picksGraded: number;
+  readonly gamesVoided: number;
+  readonly alreadyGraded: boolean;
+}
+
+/**
+ * Settles one game from an operator-supplied result.
+ *
+ * The case this exists for: the provider never reports a game final, so its
+ * picks sit ungraded and no amount of waiting helps. Before this, the only
+ * remedy was hand-written SQL against production at 11pm.
+ *
+ * It deliberately does NOT implement scoring. It builds a one-game provider
+ * from the supplied outcome and runs the real grading worker against it, so it
+ * inherits every invariant that path already has: the single transaction, the
+ * `graded_at IS NULL` guard, the bulk pick update, and the CHECK that a graded
+ * game must have a winner. A second implementation of scoring is exactly how
+ * the manual path and the automatic path come to disagree.
+ *
+ * Refuses to touch an already-settled game rather than restating history. An
+ * operator correcting a *wrong* result voids the picks instead, which is
+ * visible in the audit trail; silently rewriting a settled game is not.
+ */
+export async function gradeGameManually(
+  venueId: UUID,
+  gameId: UUID,
+  outcome: ManualOutcome,
+  deps?: Partial<OpsDeps>,
+): Promise<ManualGradeResult> {
+  const { db, logger } = resolveDeps(deps);
+
+  const found = await db.query<{ external_id: string; scheduled_at: Date; graded_at: Date | null }>(
+    'SELECT external_id, scheduled_at, graded_at FROM games WHERE id = $1::uuid AND venue_id = $2::uuid',
+    [gameId, venueId],
+  );
+
+  const game = found.rows[0];
+  if (game === undefined) {
+    throw ApiError.notFound('Game not found');
+  }
+
+  if (game.graded_at !== null) {
+    logger.warn('manual_grade_refused_already_settled', {
+      game_id: gameId,
+      venue_id: venueId,
+      graded_at: game.graded_at.toISOString(),
+    });
+    return { gameId, gamesGraded: 0, picksGraded: 0, gamesVoided: 0, alreadyGraded: true };
+  }
+
+  // Imported here rather than at module scope: the worker pulls in the sports
+  // provider and its HTTP client, and nothing else in this file needs them.
+  const [{ gradeGamesOnce }, { SportsProvider }] = await Promise.all([
+    import('../workers/grade-games'),
+    import('../lib/sports-provider'),
+  ]);
+
+  const normalized = {
+    externalId: game.external_id,
+    league: 'MANUAL',
+    sport: 'MANUAL',
+    homeTeam: '',
+    awayTeam: '',
+    homeLogoUrl: null,
+    awayLogoUrl: null,
+    scheduledAt: game.scheduled_at,
+    status: outcome.status,
+    homeScore: outcome.homeScore ?? null,
+    awayScore: outcome.awayScore ?? null,
+    winner: outcome.winner ?? null,
+  };
+
+  class OperatorProvider extends SportsProvider {
+    readonly name = 'operator';
+    fetchGames(): Promise<(typeof normalized)[]> {
+      return Promise.resolve([normalized]);
+    }
+  }
+
+  const result = await gradeGamesOnce({
+    logger,
+    provider: new OperatorProvider() as never,
+    // Scoped to this one game: the worker's own candidate query is global, and
+    // an operator asking to settle one fixture must not sweep up others.
+    listCandidates: async () => [
+      { id: gameId, venueId, externalId: game.external_id, scheduledAt: game.scheduled_at },
+    ],
+  });
+
+  logger.warn('game_graded_manually', {
+    game_id: gameId,
+    venue_id: venueId,
+    outcome,
+    games_graded: result.gamesGraded,
+    picks_graded: result.picksGraded,
+    games_voided: result.gamesVoided,
+    errors: result.errors,
+  });
+
+  return {
+    gameId,
+    gamesGraded: result.gamesGraded,
+    picksGraded: result.picksGraded,
+    gamesVoided: result.gamesVoided,
+    alreadyGraded: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Pick inspection
 // ---------------------------------------------------------------------------
 

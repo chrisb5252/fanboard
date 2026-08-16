@@ -66,11 +66,11 @@ because I cannot see it and a tick I did not earn is worse than a blank.
 - [x] Reconcile player, reporting whether the repair worked
 - [x] Inspect pick, with state named in words
 - [x] Audit log endpoint
-- [ ] **Manual grading endpoint — not built.** See gaps.
+- [x] Manual grading endpoint (settle or void a game the provider never reported)
 
 ## Ops
 
-- [x] 10 runbooks (`RUNBOOKS.md`)
+- [x] 10 runbooks (`RUNBOOKS.md`), including manual settlement
 - [x] Backup and restore procedure, tested
 - [x] Deployment guide with the Railway specifics (`DEPLOYMENT.md`)
 - [ ] On-call rotation and escalation contacts — yours to define
@@ -78,23 +78,16 @@ because I cannot see it and a tick I did not earn is worse than a blank.
 
 ## Tests
 
-- [x] 551 tests, three consecutive full runs, no flakes
-- [x] Coverage 82% statements / 80.6% branches; workers 91%, services 91%
+- [x] 607 tests, three consecutive full runs, no flakes
+- [x] Coverage 83.3% statements / 81.4% branches; workers 91%, services 92%
 - [x] Concurrency: pick races, lock boundary, double settlement, snapshot races
 - [x] Venue isolation under concurrent cross-venue load
 - [x] Load: 100 concurrent players, p95 18ms, 0 errors
-- [ ] `websocket.ts` branch coverage still 62% — the weakest module
+- [x] `websocket.ts` branch coverage raised 62% → 71%; failure paths now covered
 
 ---
 
 ## Gaps that matter
-
-**No manual grading endpoint.** If the sports provider never reports a game
-final, its picks stay ungraded and there is no supported way to settle them.
-This is the most likely incident with no tool behind it. I did not build it in
-this pass rather than ship a half-tested endpoint that writes scores — it needs
-the same idempotency guarantees as the worker, and those deserve tests before
-an operator points it at a live venue.
 
 **No alerting.** Everything needed is in the logs, and nothing is watching
 them. `leaderboard_mismatch` in particular is logged at error level and should
@@ -103,9 +96,11 @@ page someone.
 **Audit log grows without bound.** No retention job; the 90-day policy is
 aspirational.
 
-**`websocket.ts` at 62% branch coverage.** The realtime layer's failure paths —
-subscriber errors, malformed frames, heartbeat termination — are the least
-exercised code in the system.
+**`websocket.ts` at 71% branch coverage**, up from 62%. Authentication
+refusals, delivery to an empty room, large payloads, lifecycle guards and a
+poisoned Redis frame are covered. The heartbeat's terminate path still is not:
+it needs a client that accepts a socket and then stops answering pings, which
+is a half-minute of wall clock per assertion.
 
 **Single-region, single-instance assumptions are now tested but not exercised.**
 The snapshot race was found and fixed by test, not by production traffic.

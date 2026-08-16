@@ -372,6 +372,159 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('operator tools', () => {
   // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
+  // Manual settlement
+  // -------------------------------------------------------------------------
+
+  describe('manual grading', () => {
+    async function ungradedGame(label: string, nicknames: string[]): Promise<UUID> {
+      const game = await seedGame(venueId, `${PREFIX}-${label}`, `NOW() - INTERVAL '3 hours'`);
+      for (const nickname of nicknames) {
+        const player = await seedPlayer(venueId, nickname);
+        await db.query(
+          `INSERT INTO picks (venue_id, game_id, player_session_id, predicted_winner)
+           VALUES ($1::uuid,$2::uuid,$3::uuid,$4::text)`,
+          [venueId, game, player, nickname.endsWith('Home') ? 'home' : 'away'],
+        );
+      }
+      return game;
+    }
+
+    it('settles a game the provider never reported, scoring each pick once', async () => {
+      const game = await ungradedGame('m1', ['ManualHome', 'ManualAway']);
+
+      const result = await ops.gradeGameManually(
+        venueId,
+        game,
+        { status: 'final', winner: 'home', homeScore: 24, awayScore: 21 },
+        { logger: silent },
+      );
+
+      expect(result.gamesGraded).toBe(1);
+      expect(result.picksGraded).toBe(2);
+      expect(result.alreadyGraded).toBe(false);
+
+      const scored = await db.query<{ nickname: string; points: number; correct: boolean }>(
+        `SELECT s.nickname, p.points, p.correct
+           FROM picks p JOIN player_sessions s ON s.id = p.player_session_id
+          WHERE p.game_id = $1::uuid ORDER BY s.nickname`,
+        [game],
+      );
+      expect(scored.rows).toEqual([
+        { nickname: 'ManualAway', points: 0, correct: false },
+        { nickname: 'ManualHome', points: 10, correct: true },
+      ]);
+    }, 30_000);
+
+    it('writes the score and winner onto the game itself', async () => {
+      const game = await ungradedGame('m2', ['ScoreHome']);
+      await ops.gradeGameManually(
+        venueId,
+        game,
+        { status: 'final', winner: 'away', homeScore: 14, awayScore: 28 },
+        { logger: silent },
+      );
+
+      const row = await db.query<{
+        status: string;
+        winner: string;
+        home_score: number;
+        away_score: number;
+        graded_at: Date | null;
+      }>('SELECT status, winner, home_score, away_score, graded_at FROM games WHERE id = $1::uuid', [
+        game,
+      ]);
+      expect(row.rows[0]).toMatchObject({
+        status: 'final',
+        winner: 'away',
+        home_score: 14,
+        away_score: 28,
+      });
+      expect(row.rows[0]?.graded_at).not.toBeNull();
+    }, 30_000);
+
+    it('voids every pick when the game is cancelled', async () => {
+      const game = await ungradedGame('m3', ['VoidHome', 'VoidAway']);
+
+      const result = await ops.gradeGameManually(
+        venueId,
+        game,
+        { status: 'cancelled' },
+        { logger: silent },
+      );
+      expect(result.gamesVoided).toBe(1);
+
+      const rows = await db.query<{ correct: boolean | null; points: number | null }>(
+        'SELECT correct, points FROM picks WHERE game_id = $1::uuid',
+        [game],
+      );
+      // Voided is neither a win nor a loss: both null, with graded_at set.
+      expect(rows.rows.every((r) => r.correct === null && r.points === null)).toBe(true);
+
+      const board = await leaderboard.computeLeaderboard(venueId, 'all_time');
+      expect(board).toEqual([]);
+    }, 30_000);
+
+    it('refuses to restate a game that is already settled', async () => {
+      // Rewriting a settled result silently is how a leaderboard changes
+      // underneath people with no trail. Correcting one means voiding picks.
+      const game = await ungradedGame('m4', ['SettledHome']);
+      await ops.gradeGameManually(
+        venueId,
+        game,
+        { status: 'final', winner: 'home' },
+        { logger: silent },
+      );
+
+      const second = await ops.gradeGameManually(
+        venueId,
+        game,
+        { status: 'final', winner: 'away' },
+        { logger: silent },
+      );
+
+      expect(second.alreadyGraded).toBe(true);
+      expect(second.gamesGraded).toBe(0);
+
+      const row = await db.query<{ winner: string; points: number }>(
+        `SELECT g.winner, p.points FROM games g JOIN picks p ON p.game_id = g.id
+          WHERE g.id = $1::uuid`,
+        [game],
+      );
+      expect(row.rows[0]).toMatchObject({ winner: 'home', points: 10 });
+    }, 30_000);
+
+    it('will not settle a game belonging to another venue', async () => {
+      const game = await seedGame(otherVenueId, `${PREFIX}-m5`, `NOW() - INTERVAL '3 hours'`);
+      await expect(
+        ops.gradeGameManually(
+          venueId,
+          game,
+          { status: 'final', winner: 'home' },
+          { logger: silent },
+        ),
+      ).rejects.toMatchObject({ status: 404 });
+    }, 30_000);
+
+    it('does not touch other ungraded games at the same venue', async () => {
+      const target = await ungradedGame('m6a', ['TargetHome']);
+      const bystander = await ungradedGame('m6b', ['BystanderHome']);
+
+      await ops.gradeGameManually(
+        venueId,
+        target,
+        { status: 'final', winner: 'home' },
+        { logger: silent },
+      );
+
+      const untouched = await db.query<{ graded_at: Date | null }>(
+        'SELECT graded_at FROM games WHERE id = $1::uuid',
+        [bystander],
+      );
+      expect(untouched.rows[0]?.graded_at).toBeNull();
+    }, 30_000);
+  });
+
+  // -------------------------------------------------------------------------
   // HTTP contract
   // -------------------------------------------------------------------------
 
@@ -500,6 +653,91 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('operator tools', () => {
         { params: Promise.resolve({ venueId: keyedVenue }) },
       );
       expect(response.status).toBe(400);
+    }, 30_000);
+
+    it('validates the supplied result before it can reach the database', async () => {
+      // The CHECK that a settled game must have a winner would turn each of
+      // these into a constraint violation and a 500. The operator gets a
+      // sentence naming the field instead.
+      const gradeRoute = await import(
+        '../src/app/api/admin/venues/[venueId]/games/[gameId]/grade/route'
+      );
+      const game = await seedGame(keyedVenue, `${PREFIX}-rv`, `NOW() - INTERVAL '3 hours'`);
+
+      const send = (body: unknown): Promise<Response> =>
+        gradeRoute.POST(
+          authed(`https://x.test/a/${keyedVenue}/games/${game}/grade`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+          }),
+          { params: Promise.resolve({ venueId: keyedVenue, gameId: game }) },
+        );
+
+      // Missing reason.
+      expect((await send({ status: 'final', winner: 'home' })).status).toBe(400);
+      // Unknown status.
+      expect((await send({ status: 'abandoned', reason: 'x' })).status).toBe(400);
+      // Final with no winner.
+      expect((await send({ status: 'final', reason: 'x' })).status).toBe(400);
+      // Winner outside the whitelist.
+      expect((await send({ status: 'final', winner: 'both', reason: 'x' })).status).toBe(400);
+      // Non-integer and negative scores.
+      expect(
+        (await send({ status: 'final', winner: 'home', homeScore: 1.5, reason: 'x' })).status,
+      ).toBe(400);
+      expect(
+        (await send({ status: 'final', winner: 'home', homeScore: -1, reason: 'x' })).status,
+      ).toBe(400);
+    }, 30_000);
+
+    it('settles a game over HTTP and reports what it scored', async () => {
+      const gradeRoute = await import(
+        '../src/app/api/admin/venues/[venueId]/games/[gameId]/grade/route'
+      );
+      const game = await seedGame(keyedVenue, `${PREFIX}-rg`, `NOW() - INTERVAL '3 hours'`);
+      const player = await seedPlayer(keyedVenue, 'RouteGraded');
+      await db.query(
+        `INSERT INTO picks (venue_id, game_id, player_session_id, predicted_winner)
+         VALUES ($1::uuid,$2::uuid,$3::uuid,'home')`,
+        [keyedVenue, game, player],
+      );
+
+      const response = await gradeRoute.POST(
+        authed(`https://x.test/a/${keyedVenue}/games/${game}/grade`, {
+          method: 'POST',
+          body: JSON.stringify({
+            status: 'final',
+            winner: 'home',
+            homeScore: 21,
+            awayScore: 7,
+            reason: 'provider never reported',
+          }),
+        }),
+        { params: Promise.resolve({ venueId: keyedVenue, gameId: game }) },
+      );
+
+      expect(response.status).toBe(200);
+      expect((await response.json()) as { picksGraded: number }).toMatchObject({
+        gamesGraded: 1,
+        picksGraded: 1,
+        alreadyGraded: false,
+      });
+    }, 30_000);
+
+    it('refuses to settle a game at another venue', async () => {
+      const gradeRoute = await import(
+        '../src/app/api/admin/venues/[venueId]/games/[gameId]/grade/route'
+      );
+      const game = await seedGame(venueId, `${PREFIX}-rx`, `NOW() - INTERVAL '3 hours'`);
+
+      const response = await gradeRoute.POST(
+        authed(`https://x.test/a/${venueId}/games/${game}/grade`, {
+          method: 'POST',
+          body: JSON.stringify({ status: 'final', winner: 'home', reason: 'not mine' }),
+        }),
+        { params: Promise.resolve({ venueId, gameId: game }) },
+      );
+      expect(response.status).toBe(403);
     }, 30_000);
 
     it('returns the audit trail of what an operator did', async () => {

@@ -324,6 +324,80 @@ describe.skipIf(TEST_DATABASE_URL === undefined)('concurrency and integrity', ()
       expect(row.rows[0]?.correct).toBe(true);
     }, 60_000);
 
+    it('settles once when two separate instances grade the same game', async () => {
+      // The Promise.all above races two runs over one shared pool. This races
+      // two runs over two *independent* pools, which is what two containers
+      // actually are: no shared client, no shared transaction state, nothing in
+      // common but the database. The guard has to hold there or it does not
+      // hold in production.
+      const { Pool } = await import('pg');
+      const instanceA = new Pool({ connectionString: TEST_DATABASE_URL, max: 2 });
+      const instanceB = new Pool({ connectionString: TEST_DATABASE_URL, max: 2 });
+
+      /** withTransaction bound to one instance's own pool. */
+      const transactorFor =
+        (pool: InstanceType<typeof Pool>) =>
+        async <T>(work: (tx: DbNamespace.SqlExecutor) => Promise<T>): Promise<T> => {
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+            const value = await work({
+              query: async <R>(text: string, params?: readonly unknown[]) => {
+                const r = await client.query(text, params as unknown[]);
+                return { rows: r.rows as R[], rowCount: r.rowCount ?? 0 };
+              },
+            });
+            await client.query('COMMIT');
+            return value;
+          } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+          } finally {
+            client.release();
+          }
+        };
+
+      try {
+        const game = await seedGame(venueA, `${PREFIX}-mi`, `NOW() - INTERVAL '2 hours'`);
+        const player = await seedPlayer(venueA, 'MultiInstance');
+        await db.query(
+          `INSERT INTO picks (venue_id, game_id, player_session_id, predicted_winner)
+           VALUES ($1::uuid,$2::uuid,$3::uuid,'home')`,
+          [venueA, game, player],
+        );
+
+        const runOn = (pool: InstanceType<typeof Pool>) =>
+          grade.gradeGamesOnce({
+            logger: silent,
+            provider: new StubProvider([finished(`${PREFIX}-mi`, 'home')]),
+            listCandidates: async () => [
+              { id: game, venueId: venueA, externalId: `${PREFIX}-mi`, scheduledAt: new Date() },
+            ],
+            withTransaction: transactorFor(pool),
+            invalidateLeaderboards: async () => undefined,
+            notify: async () => undefined,
+            broadcastGraded: async () => undefined,
+          });
+
+        const [a, b] = await Promise.all([runOn(instanceA), runOn(instanceB)]);
+
+        expect(a.gamesGraded + b.gamesGraded).toBe(1);
+        expect(a.errors + b.errors).toBe(0);
+
+        const row = await db.query<{ points: number; graded_at: Date | null }>(
+          'SELECT points, graded_at FROM picks WHERE game_id = $1::uuid',
+          [game],
+        );
+        // 10, not 20: the loser re-evaluated `graded_at IS NULL` against the
+        // committed row after waiting on the lock, and matched nothing.
+        expect(row.rows[0]?.points).toBe(10);
+        expect(row.rows[0]?.graded_at).not.toBeNull();
+      } finally {
+        await instanceA.end();
+        await instanceB.end();
+      }
+    }, 60_000);
+
     it('does not re-score when a later run reports a different winner', async () => {
       // A provider that changes its mind after a game is settled must not be
       // able to rewrite history, or a leaderboard silently restates itself.

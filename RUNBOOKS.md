@@ -308,8 +308,37 @@ SELECT g.id, g.external_id, g.status, g.graded_at,
   settlement and pick scoring happen in one transaction. Escalate, and take a
   backup before touching anything.
 
-There is **no manual grading endpoint**. If the provider never reports a game,
-it stays ungraded. See the gap noted at the end of this file.
+### Settling a game the provider never reported
+
+When `graded_at` stays NULL because the provider will not report the game final
+— a fixture it never carried, an id that changed mid-season — settle it by hand:
+
+```bash
+curl -X POST -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+  -d '{"status":"final","winner":"home","homeScore":24,"awayScore":21,"reason":"provider never reported"}' \
+  https://api.fanboard.com/api/admin/venues/$VENUE_ID/games/$GAME_ID/grade
+```
+
+For an abandoned fixture, void every pick on it instead — neither a win nor a
+loss for anybody:
+
+```bash
+curl -X POST -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+  -d '{"status":"cancelled","reason":"match abandoned"}' \
+  https://api.fanboard.com/api/admin/venues/$VENUE_ID/games/$GAME_ID/grade
+```
+
+This runs the same grading path the worker does, so it settles the game and
+scores every pick in one transaction, and the leaderboard is rebuilt
+immediately.
+
+**It refuses a game that is already settled** (`alreadyGraded: true`), rather
+than restating history. To correct a result that was graded *wrongly*, void the
+affected picks with runbook 8 — that leaves a trail in the audit log, and a
+silent rewrite does not.
+
+Check `winner` against the actual result before sending. Nothing downstream
+second-guesses it, and an operator typo becomes a real player's real points.
 
 ## 8. A player has the wrong points
 
