@@ -11,6 +11,7 @@
     "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
     "test": "vitest run --config vitest.config.mts",
     "test:watch": "vitest --config vitest.config.mts",
+    "test:coverage": "vitest run --config vitest.config.mts --coverage.enabled",
     "db:apply": "psql \"$DATABASE_URL\" -f schema.sql"
   },
   "dependencies": {
@@ -20,16 +21,17 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "redis": "^6.2.1",
-    "zod": "^4.4.3",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "@types/pg": "^8.15.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/ws": "^8.5.13",
+    "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10",
-    "@types/ws": "^8.5.13"
+    "vitest": "^4.1.10"
   }
 }
