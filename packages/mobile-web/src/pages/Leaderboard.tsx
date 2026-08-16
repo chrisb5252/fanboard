@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { fetchLeaderboard, type LeaderboardPeriod, type LeaderboardRow } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
+import { rankProgress, tierFor } from '../lib/gamification';
 
 const REFRESH_MS = 10_000;
 const THIN_BOARD_THRESHOLD = 5;
@@ -84,7 +85,23 @@ export function Leaderboard({ venueId, nickname, refreshNonce = 0 }: Leaderboard
             </p>
           )}
 
-          <table className="table">
+          {/* The chase line, repeated from the games header so a player does not
+            have to switch tabs to see what is within reach. */}
+        {(() => {
+          const mine = rankProgress(rows, nickname);
+          if (mine === null || mine.chasing === null) {
+            return null;
+          }
+          return (
+            <p className="chase__inline">
+              <strong>{mine.pointsBehind}</strong>{' '}
+              {mine.pointsBehind === 1 ? 'point' : 'points'} to catch {mine.chasing.nickname}. You
+              got this!
+            </p>
+          );
+        })()}
+
+        <table className="table">
             <caption className="visually-hidden">Leaderboard, {period}</caption>
             <thead>
               <tr>
@@ -104,10 +121,27 @@ export function Leaderboard({ venueId, nickname, refreshNonce = 0 }: Leaderboard
                     className={isMe ? 'row row--me' : 'row'}
                     aria-current={isMe ? 'true' : undefined}
                   >
-                    <td>{row.rank}</td>
+                    <td>
+                      {/* Medal for the podium; the rank number stays available
+                          to screen readers, so the emoji is decorative only. */}
+                      {row.rank <= 3 ? (
+                        <>
+                          <span aria-hidden="true">
+                            {row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : '🥉'}
+                          </span>
+                          <span className="visually-hidden">{row.rank}</span>
+                        </>
+                      ) : (
+                        row.rank
+                      )}
+                    </td>
                     <td>
                       {row.nickname}
                       {isMe && <span className="you"> you</span>}
+                      <span className="tier-dot">
+                        <span aria-hidden="true">{tierFor(row.points).emoji}</span>
+                        <span className="visually-hidden">{tierFor(row.points).name}</span>
+                      </span>
                     </td>
                     <td>{row.wins}</td>
                     <td>{row.losses}</td>

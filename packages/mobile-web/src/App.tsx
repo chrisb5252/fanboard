@@ -1,9 +1,19 @@
-import { useCallback, useMemo, useState } from 'react';
-import { fetchMyPicks, type Game, type MyPick, type PredictedWinner } from './lib/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  fetchLeaderboard,
+  fetchMyPicks,
+  type Game,
+  type LeaderboardRow,
+  type MyPick,
+  type PredictedWinner,
+} from './lib/api';
 import { clearSession, loadSession, saveSession, venueIdFromLocation } from './lib/session';
 import { usePolling } from './lib/usePolling';
 import { useRealtime } from './lib/realtime';
+import { newlyCorrect } from './lib/gamification';
 import { BottomNav, type TabId } from './components/BottomNav';
+import { Celebration } from './components/Celebration';
+import { StatsHeader } from './components/StatsHeader';
 import { NicknameModal } from './components/NicknameModal';
 import { PickConfirmation } from './components/PickConfirmation';
 import { PickForm } from './components/PickForm';
@@ -13,6 +23,8 @@ import { Leaderboard } from './pages/Leaderboard';
 import { MyPicks } from './pages/MyPicks';
 
 const PICKS_REFRESH_MS = 10_000;
+/* Slower than picks: the header's chase line moves less often than a result. */
+const BOARD_REFRESH_MS = 30_000;
 
 interface Player {
   playerId: string;
@@ -140,6 +152,41 @@ export function App() {
     },
   });
 
+  /**
+   * This week's board, for the header's "who am I chasing" line.
+   *
+   * Fetched here rather than inside StatsHeader so the games tab and the
+   * leaderboard tab do not each poll the same endpoint on their own timer.
+   */
+  const boardFetcher = useCallback(
+    (signal: AbortSignal) => fetchLeaderboard(venueId ?? '', 'this_week', signal),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [venueId, realtimeNonce],
+  );
+
+  const boardState = usePolling<LeaderboardRow[]>(boardFetcher, BOARD_REFRESH_MS, {
+    enabled: joined,
+  });
+
+  /**
+   * Fires the celebration when a pick flips to correct.
+   *
+   * Keyed off the transition between two snapshots rather than "is any pick
+   * correct", so it goes off once when the result lands and not on every poll
+   * afterwards. The ref holds the previous snapshot without causing a render.
+   */
+  const previousPicks = useRef<MyPick[]>([]);
+  const [celebrating, setCelebrating] = useState<string | null>(null);
+
+  useEffect(() => {
+    const settled = picksState.data ?? [];
+    const wins = newlyCorrect(previousPicks.current, settled);
+    previousPicks.current = settled;
+    if (wins.length > 0) {
+      setCelebrating(wins.join(','));
+    }
+  }, [picksState.data]);
+
   const handleSubmitted = useCallback(
     (game: Game, winner: PredictedWinner) => {
       setOptimistic((previous) => new Map(previous).set(game.id, winner));
@@ -190,6 +237,13 @@ export function App() {
             lockedGames={lockedGames}
             onSelectGame={setOpenGame}
             onSessionExpired={endSession}
+            header={
+              <StatsHeader
+                nickname={player.nickname}
+                picks={picks}
+                board={boardState.data ?? []}
+              />
+            }
           />
         )}
         {tab === 'picks' && (
@@ -205,6 +259,8 @@ export function App() {
       </main>
 
       <BottomNav active={tab} onChange={setTab} />
+
+      <Celebration trigger={celebrating} />
 
       {openGame !== null && (
         <PickForm

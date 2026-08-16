@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, type ReactNode } from 'react';
 import { fetchGames, type Game, type MyPick } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { GameCard } from '../components/GameCard';
@@ -43,6 +43,8 @@ export interface GamesListProps {
   lockedGames?: Set<string>;
   onSelectGame: (game: Game) => void;
   onSessionExpired: () => void;
+  /** Rendered above the list. Optional so the list stays usable without it. */
+  header?: ReactNode;
 }
 
 export function GamesList({
@@ -52,6 +54,7 @@ export function GamesList({
   lockedGames,
   onSelectGame,
   onSessionExpired,
+  header,
 }: GamesListProps) {
   // refreshNonce is in the dependency list on purpose: usePolling refetches
   // when the fetcher identity changes, so bumping it is how a realtime event
@@ -107,11 +110,17 @@ export function GamesList({
   }
 
   if (sections.length === 0) {
-    return <p className="state">No games scheduled here today. Check back later.</p>;
+    return (
+      <div className="page">
+        {header}
+        <p className="state">No games on here just yet. Check back soon!</p>
+      </div>
+    );
   }
 
   return (
     <div className="page">
+      {header}
       {/* A failed refresh keeps the last good list on screen rather than
           blanking it; the banner says the data may be stale. */}
       {error !== null && (
@@ -130,6 +139,7 @@ export function GamesList({
                 game={game}
                 onSelect={onSelectGame}
                 pickedWinner={pickByGame.get(game.id)?.predictedWinner}
+                pickResult={pickByGame.get(game.id)?.correct ?? null}
               />
             ))}
           </div>

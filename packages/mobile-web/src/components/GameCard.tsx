@@ -50,17 +50,20 @@ export interface GameCardProps {
   game: Game;
   onSelect: (game: Game) => void;
   pickedWinner?: 'home' | 'away' | undefined;
+  /** true correct, false wrong, null not settled yet (or voided). */
+  pickResult?: boolean | null;
 }
 
-export function GameCard({ game, onSelect, pickedWinner }: GameCardProps) {
+export function GameCard({ game, onSelect, pickedWinner, pickResult = null }: GameCardProps) {
   const showScore = game.status === 'live' || game.status === 'final';
   const progress = progressLabel(game);
   const open = game.status === 'scheduled';
+  const picked = pickedWinner !== undefined;
 
   return (
     <button
       type="button"
-      className="card"
+      className={`card${picked ? ' card--picked' : ''}`}
       onClick={() => onSelect(game)}
       aria-label={`${game.homeTeam} versus ${game.awayTeam}, ${
         open ? `starts ${formatKickoff(game.scheduledAt)}` : game.status
@@ -79,12 +82,22 @@ export function GameCard({ game, onSelect, pickedWinner }: GameCardProps) {
       <TeamRow name={game.homeTeam} logoUrl={game.homeLogoUrl} score={game.homeScore} showScore={showScore} />
       <TeamRow name={game.awayTeam} logoUrl={game.awayLogoUrl} score={game.awayScore} showScore={showScore} />
 
-      {pickedWinner !== undefined && (
+      {picked && (
         <p className="card__foot">
-          Your pick: {pickedWinner === 'home' ? game.homeTeam : game.awayTeam}
+          <span>You picked {pickedWinner === 'home' ? game.homeTeam : game.awayTeam}</span>
+          {/* Only shown once settled. A wrong pick gets a muted chip rather
+              than red: it is information, not a telling-off. */}
+          {pickResult === true && (
+            <span className="result result--win">
+              <span aria-hidden="true">🎉</span> Nailed it +10
+            </span>
+          )}
+          {pickResult === false && (
+            <span className="result result--loss">Not this time</span>
+          )}
         </p>
       )}
-      {pickedWinner === undefined && open && <p className="card__foot card__foot--cta">Tap to pick</p>}
+      {!picked && open && <p className="card__foot card__foot--cta">Tap to pick →</p>}
     </button>
   );
 }
