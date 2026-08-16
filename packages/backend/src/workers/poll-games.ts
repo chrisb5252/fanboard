@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { SqlExecutor } from '../lib/db';
 import { withTransaction as defaultWithTransaction, query } from '../lib/db';
 import { getEnv } from '../lib/env';
+import { EspnProvider } from '../lib/espn';
 import { leagueMatchesFor, sportsForLeagues } from '../lib/leagues';
 import { logger as rootLogger, type Logger } from '../lib/logger';
 import { get as redisGet, set as redisSet } from '../lib/redis';
@@ -106,12 +107,28 @@ export function createRedisCacheStore(): CacheStore {
   };
 }
 
+/**
+ * ESPN by default, TheSportsDB on request.
+ *
+ * Measured against both live APIs on the same day: TheSportsDB's free key
+ * returned 4 NFL games and no NHL at all, ESPN returned 16 and 7. The free key
+ * serves a sample rather than a slate, and ESPN needs no key — so the default
+ * is the one that works out of the box.
+ *
+ * TheSportsDB stays reachable with SPORTS_PROVIDER=thesportsdb: it covers
+ * football and the college leagues, which ESPN's four endpoints here do not,
+ * and a paid key removes the sampling.
+ */
 function createDefaultProvider(): SportsProvider {
-  return new TheSportsDBProvider({
-    apiKey: getEnv().THESPORTSDB_API_KEY,
-    cache: createRedisCacheStore(),
-    cacheTtlSeconds: SPORTS_CACHE_TTL_SECONDS,
-  });
+  if (process.env['SPORTS_PROVIDER'] === 'thesportsdb') {
+    return new TheSportsDBProvider({
+      apiKey: getEnv().THESPORTSDB_API_KEY,
+      cache: createRedisCacheStore(),
+      cacheTtlSeconds: SPORTS_CACHE_TTL_SECONDS,
+    });
+  }
+
+  return new EspnProvider();
 }
 
 async function listAllVenueIds(): Promise<string[]> {
