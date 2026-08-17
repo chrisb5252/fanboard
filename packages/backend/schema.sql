@@ -81,6 +81,39 @@ ALTER TABLE venues ADD CONSTRAINT venues_timezone_known
 COMMENT ON COLUMN venues.timezone IS
   'IANA zone (e.g. America/New_York) defining this venue''s day for the games list and the daily leaderboard. Defaults to UTC.';
 
+-- What kind of venue this is, and therefore what patrons predict.
+--
+--   sports_bar     games + picks           — who wins a fixture
+--   bowling_alley  bowling_lanes + bowling_predictions — what a bowler scores
+--
+-- NOT NULL with a default rather than nullable: every venue is one kind or the
+-- other, and a null would leave the read path guessing. Existing rows are
+-- backfilled by the DEFAULT, so no separate UPDATE is needed.
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'sports_bar';
+ALTER TABLE venues ADD COLUMN IF NOT EXISTS num_lanes INTEGER;
+
+-- CHECK rather than an enum type, matching how status is handled elsewhere: a
+-- new venue kind is then a one-line change here rather than an ALTER TYPE that
+-- cannot run inside a transaction.
+ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_type_known;
+ALTER TABLE venues ADD CONSTRAINT venues_type_known
+  CHECK (type IN ('sports_bar', 'bowling_alley'));
+
+-- num_lanes belongs to bowling alleys and only to them. Without this a sports
+-- bar could carry a lane count that nothing reads, and a bowling alley could
+-- carry none while the app expects one.
+ALTER TABLE venues DROP CONSTRAINT IF EXISTS venues_num_lanes_matches_type;
+ALTER TABLE venues ADD CONSTRAINT venues_num_lanes_matches_type
+  CHECK (
+    (type = 'bowling_alley' AND num_lanes IS NOT NULL AND num_lanes BETWEEN 1 AND 200)
+    OR (type <> 'bowling_alley' AND num_lanes IS NULL)
+  );
+
+COMMENT ON COLUMN venues.type IS
+  'sports_bar predicts fixtures via games/picks; bowling_alley predicts scores via bowling_lanes/bowling_predictions.';
+COMMENT ON COLUMN venues.num_lanes IS
+  'Lane count, required for bowling_alley and NULL otherwise.';
+
 -- Suspension. An operator needs a way to stop a venue taking new picks without
 -- deleting anything: a disputed result, a display showing the wrong fixtures, a
 -- venue under investigation. Suspension blocks new picks only — games still
@@ -447,5 +480,133 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_venue_created_at
 -- "Every occurrence of this action", for tracing one kind of change across time.
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created_at
   ON audit_logs (action, created_at DESC);
+
+-- -----------------------------------------------------------------------------
+-- bowling_lanes — a bowling alley's lanes, the equivalent of games at a bar.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS bowling_lanes (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  venue_id            UUID        NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
+  lane_number         INTEGER     NOT NULL CHECK (lane_number BETWEEN 1 AND 200),
+  status              TEXT        NOT NULL DEFAULT 'available'
+                                  CHECK (status IN ('available', 'in_use', 'closed')),
+  current_bowler_name TEXT        CHECK (current_bowler_name IS NULL
+                                         OR length(btrim(current_bowler_name)) BETWEEN 1 AND 50),
+  -- Ten frames, and only ten. A frame counter that drifts past 10 would make
+  -- "is this game over?" unanswerable.
+  current_frame       INTEGER     NOT NULL DEFAULT 1 CHECK (current_frame BETWEEN 1 AND 10),
+  current_score       INTEGER     NOT NULL DEFAULT 0 CHECK (current_score BETWEEN 0 AND 300),
+  final_score         INTEGER     CHECK (final_score BETWEEN 0 AND 300),
+  -- Deliberately no `predictions_locked` boolean beside this. Two columns
+  -- meaning the same thing can disagree, and then nothing can say which is
+  -- right. Locked is `locked_at IS NOT NULL`, exactly as it is for games.
+  locked_at           TIMESTAMPTZ,
+  graded_at           TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- One lane number per venue; this is also the natural upsert key.
+  CONSTRAINT bowling_lanes_venue_id_lane_number_key UNIQUE (venue_id, lane_number),
+  -- Target for the composite foreign key from bowling_predictions, the same
+  -- trick games uses to make cross-venue rows impossible.
+  CONSTRAINT bowling_lanes_venue_id_id_key UNIQUE (venue_id, id),
+
+  -- A graded lane must have a final score to have been graded against.
+  CONSTRAINT bowling_lanes_graded_requires_score
+    CHECK (graded_at IS NULL OR final_score IS NOT NULL)
+);
+
+COMMENT ON TABLE bowling_lanes IS
+  'Lanes at a bowling_alley venue. Plays the role games does at a sports_bar.';
+COMMENT ON COLUMN bowling_lanes.locked_at IS
+  'Cut-off after which no new predictions are accepted. NULL means still open.';
+COMMENT ON COLUMN bowling_lanes.final_score IS
+  'Set once frame 10 is complete; predictions are graded against it.';
+
+CREATE INDEX IF NOT EXISTS idx_bowling_lanes_venue_status
+  ON bowling_lanes (venue_id, status);
+
+-- The grading worker's candidate scan: lanes finished but not yet settled.
+-- Partial, so it holds only unsettled lanes and shrinks as they grade.
+CREATE INDEX IF NOT EXISTS idx_bowling_lanes_ungraded
+  ON bowling_lanes (venue_id)
+  WHERE graded_at IS NULL;
+
+DROP TRIGGER IF EXISTS bowling_lanes_set_updated_at ON bowling_lanes;
+CREATE TRIGGER bowling_lanes_set_updated_at
+  BEFORE UPDATE ON bowling_lanes
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- -----------------------------------------------------------------------------
+-- bowling_predictions — one score prediction per player per lane.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS bowling_predictions (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- venue_id is carried here rather than only reached through the lane. It is
+  -- what makes the composite foreign keys below possible, and those are what
+  -- stop a player at one venue predicting on another venue's lane. Without it
+  -- the database would happily accept that pairing.
+  venue_id          UUID        NOT NULL,
+  lane_id           UUID        NOT NULL,
+  player_session_id UUID        NOT NULL,
+  -- 0-300 is the full range of a ten-pin game. Scores of 291-299 are in fact
+  -- unreachable, but rejecting them would be a rule about bowling rather than
+  -- about data, and it would reject a legitimately mistyped-then-corrected
+  -- entry for no gain.
+  predicted_score   INTEGER     NOT NULL CHECK (predicted_score BETWEEN 0 AND 300),
+  actual_score      INTEGER     CHECK (actual_score BETWEEN 0 AND 300),
+  -- NULL until graded, not 0. A zero default cannot be told apart from a
+  -- prediction that was graded and scored nothing, which is the same mistake
+  -- the picks table is careful to avoid.
+  points            INTEGER,
+  accuracy_delta    INTEGER     CHECK (accuracy_delta IS NULL OR accuracy_delta BETWEEN 0 AND 300),
+  submitted_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  graded_at         TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT bowling_predictions_lane_player_key UNIQUE (lane_id, player_session_id),
+
+  -- Composite FKs: a prediction can never straddle two venues.
+  CONSTRAINT bowling_predictions_venue_lane_fkey
+    FOREIGN KEY (venue_id, lane_id)
+    REFERENCES bowling_lanes (venue_id, id) ON DELETE CASCADE,
+  CONSTRAINT bowling_predictions_venue_player_session_fkey
+    FOREIGN KEY (venue_id, player_session_id)
+    REFERENCES player_sessions (venue_id, id) ON DELETE CASCADE,
+
+  -- Three legal states, mirroring picks:
+  --   ungraded  graded_at NULL,     actual_score NULL, points NULL
+  --   graded    graded_at NOT NULL, actual_score NOT NULL, points NOT NULL
+  --   voided    graded_at NOT NULL, actual_score NULL,  points NULL
+  -- Voided is how an abandoned lane settles: finished with, but scoring
+  -- nothing. Distinguishable from ungraded only by graded_at.
+  CONSTRAINT bowling_predictions_grading_consistency
+    CHECK (
+      (actual_score IS NULL) = (points IS NULL)
+      AND (accuracy_delta IS NULL) = (points IS NULL)
+      AND (points IS NULL OR graded_at IS NOT NULL)
+    )
+);
+
+COMMENT ON TABLE bowling_predictions IS
+  'One score prediction per player per lane. Plays the role picks does at a sports_bar.';
+COMMENT ON COLUMN bowling_predictions.points IS
+  'NULL while ungraded and for voided predictions; pair with graded_at to tell those apart.';
+COMMENT ON COLUMN bowling_predictions.accuracy_delta IS
+  'abs(predicted_score - actual_score) at grading time, stored so the scoring rule can change without rewriting history.';
+
+CREATE INDEX IF NOT EXISTS idx_bowling_predictions_lane
+  ON bowling_predictions (lane_id);
+
+-- "My predictions", the patron's own list.
+CREATE INDEX IF NOT EXISTS idx_bowling_predictions_player
+  ON bowling_predictions (venue_id, player_session_id);
+
+-- The grading sweep. Partial, so it covers only what is still outstanding.
+CREATE INDEX IF NOT EXISTS idx_bowling_predictions_ungraded
+  ON bowling_predictions (lane_id)
+  WHERE graded_at IS NULL;
 
 COMMIT;
