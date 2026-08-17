@@ -81,8 +81,34 @@ export function validateGameId(id: unknown): UUID {
   return parseUuid('gameId', id);
 }
 
+export function validateLaneId(id: unknown): UUID {
+  return parseUuid('laneId', id);
+}
+
 export function validatePlayerSessionId(id: unknown): UUID {
   return parseUuid('playerSessionId', id);
+}
+
+/**
+ * A ten-pin score: a whole number from 0 to 300.
+ *
+ * Rejects the JSON shapes that would otherwise reach the database and be
+ * silently coerced — "150", 150.5, NaN — because a prediction the patron did
+ * not make is worse than a rejected one they can retype.
+ */
+export function validateBowlingScore(field: string, value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 300) {
+    fail(field, 'must be a whole number from 0 to 300');
+  }
+  return value;
+}
+
+/** Ten frames, and only ten. */
+export function validateFrame(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 10) {
+    fail('currentFrame', 'must be a whole number from 1 to 10');
+  }
+  return value;
 }
 
 export function validateDeviceId(id: unknown): UUID {

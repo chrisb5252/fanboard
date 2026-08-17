@@ -200,6 +200,24 @@ src/lib/health.ts             shared probe shape for dependency checks
 | `GET /api/devices/:deviceId/display` | `x-display-key` | 200 | 400, 401, 404 |
 | `POST /api/devices/:deviceId/heartbeat` | `x-display-key` | 200 | 400, 401, 404 |
 
+Bowling alleys (`venues.type = 'bowling_alley'`) predict lane scores instead of
+match winners. The two venue kinds do not share endpoints: an alley answers 404
+on `/games`, a sports bar answers 404 on `/lanes`. Both feed the same
+leaderboard, so `/leaderboard` is unchanged for either.
+
+| Route | Auth | Success | Failures |
+| --- | --- | --- | --- |
+| `GET /api/venues/:venueId/lanes` | none (public) | 200 | 400, 404 |
+| `GET·POST /api/venues/:venueId/predictions` | session cookie | 201 new · 200 changed | 400, 401, 403, 404, 423 |
+| `GET·POST /api/admin/venues/:venueId/lanes` | `Bearer <api_key>` | 200 · 201 created | 400, 401, 403, 404 |
+| `PUT /api/admin/venues/:venueId/lanes/:laneId` | `Bearer <api_key>` | 200 | 400, 401, 403, 404, 409 |
+| `POST /api/admin/venues/:venueId/lanes/:laneId/grade` | `Bearer <api_key>` | 200 | 400, 401, 403, 404 |
+
+Scoring is by accuracy: an exact call is 50 points, within 5 pins 30, within 10
+pins 15, within 20 pins 5, anything further 0. The bands live in
+`SCORING_BANDS` and are mirrored in the grading statement; a test asserts the
+two agree.
+
 The graph is acyclic (verified with `madge --circular`); `logger`, `env`,
 `health` and `sports-provider` are leaves.
 

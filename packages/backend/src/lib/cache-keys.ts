@@ -81,6 +81,11 @@ export function pickRateKey(playerSessionId: string): string {
   return `picks:${playerSessionId}`;
 }
 
+/** Bowling predictions share the pick budget's shape and its rationale. */
+export function bowlingPredictionRateKey(playerSessionId: string): string {
+  return `bowling_predictions:${playerSessionId}`;
+}
+
 /** Rate-limit bucket for display reads, keyed by the authenticated device. */
 export function displayRateKey(deviceId: string): string {
   return `display:${deviceId}`;

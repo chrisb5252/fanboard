@@ -98,22 +98,57 @@ window_start AS (
          END AS starts_at
     FROM venue_tz t
 ),
-standings AS (
+/*
+ * Both venue kinds feed the same board.
+ *
+ * A sports bar scores picks, an alley scores bowling predictions, and the two
+ * are unioned rather than branched on venue type. That keeps one ranking rule,
+ * one snapshot table and one read path — and it means a venue that somehow runs
+ * both is summed rather than silently showing half its players.
+ *
+ * Wins and losses carry over sensibly: a bowling prediction that scored
+ * anything is a win, one that scored nothing is a loss. A voided prediction is
+ * neither, exactly as a voided pick is neither.
+ */
+scored AS (
   SELECT p.player_session_id,
-         ps.nickname,
-         COALESCE(SUM(p.points), 0)::int              AS points,
-         COUNT(*) FILTER (WHERE p.correct)::int       AS wins,
-         COUNT(*) FILTER (WHERE NOT p.correct)::int   AS losses,
-         MIN(p.submitted_at)                          AS first_pick_at
+         p.venue_id,
+         COALESCE(p.points, 0)::int AS points,
+         (p.correct IS TRUE)        AS is_win,
+         (p.correct IS FALSE)       AS is_loss,
+         p.submitted_at,
+         p.created_at
     FROM picks p
-    JOIN player_sessions ps
-      ON ps.id = p.player_session_id
-     AND ps.venue_id = p.venue_id
-   CROSS JOIN window_start w
    WHERE p.venue_id = $1::uuid
      AND p.correct IS NOT NULL
-     AND (w.starts_at IS NULL OR p.created_at >= w.starts_at)
-   GROUP BY p.player_session_id, ps.nickname
+
+  UNION ALL
+
+  SELECT b.player_session_id,
+         b.venue_id,
+         COALESCE(b.points, 0)::int AS points,
+         (b.points > 0)             AS is_win,
+         (b.points = 0)             AS is_loss,
+         b.submitted_at,
+         b.created_at
+    FROM bowling_predictions b
+   WHERE b.venue_id = $1::uuid
+     AND b.points IS NOT NULL
+),
+standings AS (
+  SELECT s.player_session_id,
+         ps.nickname,
+         COALESCE(SUM(s.points), 0)::int          AS points,
+         COUNT(*) FILTER (WHERE s.is_win)::int    AS wins,
+         COUNT(*) FILTER (WHERE s.is_loss)::int   AS losses,
+         MIN(s.submitted_at)                      AS first_pick_at
+    FROM scored s
+    JOIN player_sessions ps
+      ON ps.id = s.player_session_id
+     AND ps.venue_id = s.venue_id
+   CROSS JOIN window_start w
+   WHERE (w.starts_at IS NULL OR s.created_at >= w.starts_at)
+   GROUP BY s.player_session_id, ps.nickname
 ),
 ranked AS (
   SELECT s.*,

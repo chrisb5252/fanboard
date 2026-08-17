@@ -33,6 +33,9 @@ export const AUDIT_ACTIONS = {
   playerReconciled: 'player.reconciled',
   gameGradedManually: 'game.graded_manually',
   venueTimezoneUpdated: 'venue.timezone.updated',
+  lanesProvisioned: 'bowling.lanes.provisioned',
+  laneUpdated: 'bowling.lane.updated',
+  laneGraded: 'bowling.lane.graded',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

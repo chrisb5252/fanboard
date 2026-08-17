@@ -4,6 +4,7 @@ import { toErrorBody } from '../../../../../lib/errors';
 import { logger as rootLogger } from '../../../../../lib/logger';
 import { get as redisGet, set as redisSet } from '../../../../../lib/redis';
 import { validateVenueId } from '../../../../../lib/validators';
+import { assertSportsBarVenue } from '../../../../../lib/venue-type';
 import { buildDisplayPayload, type DisplayGame } from '../../../../../services/display';
 
 export const dynamic = 'force-dynamic';
@@ -32,6 +33,13 @@ export async function GET(
   try {
     const { venueId: rawVenueId } = await params;
     const venueId = validateVenueId(rawVenueId);
+
+    // A bowling alley predicts lane scores, not match winners, and answers 404
+    // here for the same reason a sports bar answers 404 for lanes. Checked
+    // before the cache so a venue that changes type cannot keep serving the
+    // other kind's payload for the rest of the TTL.
+    await assertSportsBarVenue(venueId);
+
     const key = gamesCacheKey(venueId);
 
     const cached = await readCache(key);
